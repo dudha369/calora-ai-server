@@ -23,12 +23,16 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",
         env_file_encoding="utf-8",
+        extra="ignore",
+        env_override_existing=True,
     )
 
 
 config = Config()
 
 async def lifespan(app: FastAPI) -> AsyncGenerator:
+    print(f"DEBUG: WEBHOOK_URL is set to: '{config.WEBHOOK_URL}'")
+    
     await bot.set_webhook(
         url=f"{config.WEBHOOK_URL}/webhook",
         allowed_updates=dp.resolve_used_update_types(),
