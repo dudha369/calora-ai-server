@@ -1,3 +1,4 @@
+import os
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -19,4 +20,7 @@ dp.include_router(setup_bot_routers())
 app.include_router(setup_api_routers())
 
 if __name__ == "__main__":
-    uvicorn.run(app, host=config.APP_HOST, port=config.APP_PORT)
+    port = int(os.environ.get("PORT", config.APP_PORT))
+    host = "0.0.0.0" if "PORT" in os.environ else config.APP_HOST
+
+    uvicorn.run(app, host=host, port=port)

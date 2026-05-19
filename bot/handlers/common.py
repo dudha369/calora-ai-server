@@ -1,5 +1,6 @@
 from aiogram import Router
 from aiogram.filters import CommandStart
+from aiogram.types import Message
 
 from bot.keyboards import main_markup
 from db import User

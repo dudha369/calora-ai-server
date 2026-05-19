@@ -5,5 +5,5 @@ from config_reader import config
 
 main_markup = (
     InlineKeyboardBuilder()
-    .button(text="🌱Open", web_app=WebAppInfo(url=config.WEB_APP_URL))
+    .button(text="🌱Open", web_app=WebAppInfo(url=config.WEBAPP_URL.get_secret_value()))
 ).as_markup()

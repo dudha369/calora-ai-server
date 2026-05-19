@@ -4,6 +4,8 @@ from aiogram.utils.web_app import WebAppInitData, safe_parse_webapp_init_data
 
 from config_reader import config
 
+from db import User
+
 def auth(request: Request) -> WebAppInitData:
     try:
         auth_string = request.headers.get("initData")
