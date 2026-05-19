@@ -27,13 +27,13 @@ def auth(request: Request) -> WebAppInitData:
             detail={"error": "Unauthorized"},
         )
 
-async def check_user(user_id: int) -> User:
+async def check_user(user_id: int, first_name: str | None = None):
     user = await User.get_or_none(id=user_id)
 
-    if not user:
-        raise HTTPException(
-            status_code=401,
-            detail={"error": "Unauthorized"},
-        )
+    if user:
+        return user
 
-    return user
+    return await User.create(
+        id=user_id,
+        name=first_name or "Unknown"
+    )

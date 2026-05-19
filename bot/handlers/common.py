@@ -9,15 +9,12 @@ router = Router(name="common")
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message) -> None:
-    user = await User.filter(id=message.from_user.id).exists()
-    if not user:
-        await User.create(
-            id=message.from_user.id,
-            name=message.from_user.first_name,
-        )
-
-    await message.answer(
-        text="Open the mini-app!",
-        reply_markup=main_markup
+async def cmd_start(message: Message):
+    await User.get_or_create(
+        id=message.from_user.id,
+        defaults={
+            "name": message.from_user.first_name
+        }
     )
+
+    await message.answer("Hello!")
