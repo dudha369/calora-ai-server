@@ -31,10 +31,10 @@ class Config(BaseSettings):
 config = Config()
 
 async def lifespan(app: FastAPI) -> AsyncGenerator:
-    print(f"DEBUG: WEBHOOK_URL is set to: '{config.WEBHOOK_URL}'")
+    print(f"DEBUG: WEBHOOK_URL is set to: '{config.WEBHOOK_URL.get_secret_value()}'")
     
     await bot.set_webhook(
-        url=f"{config.WEBHOOK_URL}/webhook",
+        url=f"{config.WEBHOOK_URL.get_secret_value()}/webhook",
         allowed_updates=dp.resolve_used_update_types(),
         drop_pending_updates=True,
     )
