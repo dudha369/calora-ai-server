@@ -8,6 +8,8 @@ router = APIRouter()
 
 
 @router.post("/webhook")
-async def webhook(request: Request) -> None:
+async def webhook(request: Request) -> dict:
     update = Update.model_validate(await request.json(), context={"bot": bot})
     await dp.feed_update(bot, update)
+    
+    return {"status": "ok"}
