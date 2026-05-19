@@ -31,20 +31,23 @@ class Config(BaseSettings):
 config = Config()
 
 async def lifespan(app: FastAPI) -> AsyncGenerator:
-    print(f"DEBUG: WEBHOOK_URL is set to: '{config.WEBHOOK_URL.get_secret_value()}'")
+    webhook_url = config.WEBHOOK_URL.get_secret_value().rstrip('/')
     
-    await bot.set_webhook(
-        url=f"{config.WEBHOOK_URL.get_secret_value()}/webhook",
+    print(f"DEBUG: Setting webhook to {webhook_url}/webhook")
+
+    result = await bot.set_webhook(
+        url=f"{webhook_url}/webhook",
         allowed_updates=dp.resolve_used_update_types(),
         drop_pending_updates=True,
     )
+    
+    print(f"DEBUG: Webhook set result: {result}")
 
     await Tortoise.init(TORTOISE_ORM)
-
     yield
-
     await bot.session.close()
     await Tortoise.close_connections()
+
 
 bot = Bot(config.BOT_TOKEN.get_secret_value())
 dp = Dispatcher()
