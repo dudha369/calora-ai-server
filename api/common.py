@@ -1,28 +1,42 @@
+import asyncio
 from fastapi import APIRouter, Request
 from aiogram.types import Update
+
 from config_reader import bot, dp
 
 router = APIRouter()
 
 
-@router.get("/")
+@router.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"status": "ok"}
 
 
 @router.post("/webhook")
-async def webhook(request: Request) -> dict:
+async def webhook(request: Request):
     print("WEBHOOK HIT")
 
     try:
         data = await request.json()
-        update = Update.model_validate(data, context={"bot": bot})
 
-        print(f"UPDATE TYPE: {update.event_type}")
+        update = Update.model_validate(
+            data,
+            context={"bot": bot}
+        )
 
-        await dp.feed_update(bot, update)
+        asyncio.create_task(process_update(update))
 
     except Exception as e:
-        print(f"WEBHOOK ERROR: {e}")
+        print("WEBHOOK ERROR:", e)
 
     return {"status": "ok"}
+
+
+async def process_update(update: Update):
+    try:
+        await asyncio.wait_for(
+            dp.feed_update(bot, update),
+            timeout=10
+        )
+    except Exception as e:
+        print("PROCESS UPDATE ERROR:", e)
