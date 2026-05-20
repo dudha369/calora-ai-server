@@ -10,7 +10,13 @@ router = APIRouter(prefix="/api/users", dependencies=[Depends(auth)])
 
 @router.get("/get")
 async def get_user(request: Request, auth_data: WebAppInitData = Depends(auth)) -> JSONResponse:
+    print("!!!!!!GET USER")
+
     user = await check_user(auth_data.user.id, auth_data.user.first_name)
+    print(user)
     user_obj = (await UserSchema.from_tortoise_orm(user)).model_dump(mode="json")
+    print(user_obj)
+
+    print(JSONResponse({"user": user_obj}))
 
     return JSONResponse({"user": user_obj})
