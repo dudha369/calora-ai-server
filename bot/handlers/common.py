@@ -2,6 +2,8 @@ from aiogram import Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
+from ..keyboards import main_markup
+
 from db import User
 
 router = Router(name="common")
