@@ -5,9 +5,24 @@ from config_reader import bot, dp
 router = APIRouter()
 
 
+@router.get("/")
+async def root():
+    return {"status": "ok"}
+
+
 @router.post("/webhook")
 async def webhook(request: Request) -> dict:
     print("WEBHOOK HIT")
-    update = Update.model_validate(await request.json(), context={"bot": bot})
-    await dp.feed_update(bot, update)
+
+    try:
+        data = await request.json()
+        update = Update.model_validate(data, context={"bot": bot})
+
+        print(f"UPDATE TYPE: {update.event_type}")
+
+        await dp.feed_update(bot, update)
+
+    except Exception as e:
+        print(f"WEBHOOK ERROR: {e}")
+
     return {"status": "ok"}
