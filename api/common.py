@@ -14,8 +14,6 @@ async def root():
 
 @router.post("/webhook")
 async def webhook(request: Request):
-    print("WEBHOOK HIT")
-
     try:
         data = await request.json()
 
