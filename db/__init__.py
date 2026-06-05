@@ -1,1 +1,21 @@
-from .models.user import User, UserSchema
+from .models import (
+    User,
+    UserSchema,
+    UserProfile,
+    UserProfileSchema,
+    OnboardingDraft,
+    DailyGoal,
+    DailyGoalSchema,
+    WeightHistory,
+    WeightHistorySchema,
+    FoodLog,
+    FoodLogSchema,
+    FoodItem,
+    FoodItemSchema,
+    WaterLog,
+    WaterLogSchema,
+    Quest,
+    QuestSchema,
+    AiTip,
+    AiTipSchema,
+)

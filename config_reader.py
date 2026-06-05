@@ -10,9 +10,11 @@ from tortoise import Tortoise
 
 ROOT_DIR = Path(__file__).parent.absolute()
 
+
 class Config(BaseSettings):
     BOT_TOKEN: SecretStr
     DB_URL: SecretStr
+    GEMINI_API_KEY: SecretStr
 
     WEBHOOK_URL: SecretStr
     WEBAPP_URL: SecretStr
@@ -30,21 +32,40 @@ class Config(BaseSettings):
 
 config = Config()
 
-async def lifespan(app: FastAPI) -> AsyncGenerator:
-    webhook_url = config.WEBHOOK_URL.get_secret_value().rstrip('/')
-    
-    print(f"DEBUG: Setting webhook to {webhook_url}/webhook")
+TORTOISE_ORM = {
+    "connections": {"default": config.DB_URL.get_secret_value()},
+    "apps": {
+        "models": {
+            "models": [
+                "db.models.user",
+                "db.models.user_profile",
+                "db.models.daily_goal",
+                "db.models.weight_history",
+                "db.models.food_log",
+                "db.models.food_item",
+                "db.models.water_log",
+                "db.models.quest",
+                "db.models.ai_tip",
+                "aerich.models",
+            ],
+            "default_connection": "default",
+        }
+    },
+}
 
-    result = await bot.set_webhook(
+
+async def lifespan(app: FastAPI) -> AsyncGenerator:
+    webhook_url = config.WEBHOOK_URL.get_secret_value().rstrip("/")
+    await bot.set_webhook(
         url=f"{webhook_url}/webhook",
         allowed_updates=dp.resolve_used_update_types(),
         drop_pending_updates=True,
     )
-    
-    print(f"DEBUG: Webhook set result: {result}")
 
     await Tortoise.init(TORTOISE_ORM)
+
     yield
+
     await bot.session.close()
     await Tortoise.close_connections()
 
@@ -52,13 +73,3 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 bot = Bot(config.BOT_TOKEN.get_secret_value())
 dp = Dispatcher()
 app = FastAPI(lifespan=lifespan)
-
-TORTOISE_ORM = {
-    "connections": {"default": config.DB_URL.get_secret_value()},
-    "apps": {
-        "models": {
-            "models": ["db.models.user", "aerich.models"],
-            "default_connection": "default",
-        }
-    }
-}
