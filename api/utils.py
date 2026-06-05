@@ -3,11 +3,15 @@ from aiogram.utils.web_app import WebAppInitData, safe_parse_webapp_init_data
 from config_reader import config
 from db import User
 
-from typing import Any
+from typing import Any, Optional
 
 
-def auth(request: Request) -> WebAppInitData:
+def auth(request: Request) -> Optional[WebAppInitData]:
     """Валидирует Telegram initData из заголовка."""
+
+    if request.method == "OPTIONS":
+        return None
+
     try:
         auth_string = request.headers.get("initData")
         if not auth_string:
@@ -41,7 +45,7 @@ async def get_or_create_user(
     )
 
     if not created:
-        await User.filter(telegram_id=tg_id).update(
+        await User.filter(telegram_id=telegram_id).update(
             full_name=full_name,
             username=username,
         )
