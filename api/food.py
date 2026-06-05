@@ -32,7 +32,7 @@ class FoodItemIn(BaseModel):
 class FoodLogIn(BaseModel):
     log_date: str
     items: list[FoodItemIn]
-    photo_url: Any[str, None] = None
+    photo_url: str = None
 
 
 async def _recalc_totals(food_log: FoodLog) -> None:
