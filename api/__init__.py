@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from . import common, users, profile, onboarding, food, water, weight, quests, tips
+from . import common, users, profile, onboarding, food, water, weight, quests, tips, stats
 
 
 def setup_routers() -> APIRouter:
@@ -14,5 +14,6 @@ def setup_routers() -> APIRouter:
     router.include_router(weight.router)
     router.include_router(quests.router)
     router.include_router(tips.router)
+    router.include_router(stats.router)
 
     return router
