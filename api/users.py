@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 async def get_me(auth_data: WebAppInitData = Depends(auth)):
     tg_user = auth_data.user
     user = await get_or_create_user(
-        tg_id=tg_user.id,
+        telegram_id=tg_user.id,
         full_name=tg_user.first_name or "Unknown",
         username=tg_user.username,
         language_code=tg_user.language_code or "en",

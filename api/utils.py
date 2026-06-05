@@ -22,7 +22,7 @@ def auth(request: Request) -> WebAppInitData:
 
 
 async def get_or_create_user(
-    tg_id: int,
+    telegram_id: int,
     full_name: str,
     username: Any[str, None] = None,
     language_code: str = "ru",
@@ -32,7 +32,7 @@ async def get_or_create_user(
     При каждом запросе обновляет full_name и username.
     """
     user, created = await User.get_or_create(
-        telegram_id=tg_id,
+        telegram_id=telegram_id,
         defaults={
             "full_name": full_name,
             "username": username,

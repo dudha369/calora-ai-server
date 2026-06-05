@@ -21,7 +21,11 @@ async def _save_user(message: Message):
         await asyncio.wait_for(
             User.get_or_create(
                 telegram_id=message.from_user.id,
-                defaults={"full_name": message.from_user.first_name or "Unknown"},
+                defaults={
+                    "full_name": message.from_user.first_name or "Unknown",
+                    "username": message.from_user.username,
+                    "language_code": message.from_user.language_code,
+                },
             ),
             timeout=2.0,
         )

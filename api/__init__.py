@@ -4,6 +4,7 @@ from . import common, users, profile, onboarding, food, water, weight, quests, t
 
 def setup_routers() -> APIRouter:
     router = APIRouter()
+
     router.include_router(common.router)
     router.include_router(users.router)
     router.include_router(profile.router)
@@ -13,4 +14,5 @@ def setup_routers() -> APIRouter:
     router.include_router(weight.router)
     router.include_router(quests.router)
     router.include_router(tips.router)
+
     return router
