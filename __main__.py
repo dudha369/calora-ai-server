@@ -25,6 +25,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def debug_middleware(request: Request, call_next):
+    if request.method == "OPTIONS":
+        # Если это OPTIONS, просто отвечаем 200 OK сразу
+        from fastapi.responses import Response
+        return Response(status_code=200)
+
+    # Иначе продолжаем цепочку
+    return await call_next(request)
+
 dp.include_router(setup_bot_routers())
 app.include_router(setup_api_routers())
 
