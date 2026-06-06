@@ -20,27 +20,27 @@ class OnboardingDraft(Model):
 
     step = fields.SmallIntField(default=0)
 
-    # Страница 1
+    # Шаг 1
     gender = fields.CharField(max_length=6, null=True)
-    # Страница 2
+    # Шаг 2
     age = fields.SmallIntField(null=True)
-    # Страница 3
+    # Шаг 3
     height_cm = fields.SmallIntField(null=True)
-    # Страница 4
+    # Шаг 4
     weight_kg = fields.DecimalField(max_digits=5, decimal_places=1, null=True)
-    # Страница 5
+    # Шаг 5
     goal = fields.CharField(max_length=10, null=True)
-    # Страница 6 (только если goal != maintain)
+    # Шаг 6 (только если goal != maintain)
     target_weight = fields.DecimalField(max_digits=5, decimal_places=1, null=True)
-    # Страница 7
+    # Шаг 7
     activity_level = fields.FloatField(null=True)  # 1.2 | 1.375 | 1.55 | 1.725 | 1.9
-    # Страница 8
+    # Шаг 8
     dietary_restrictions = fields.JSONField(default=list)
     allergy_note = fields.TextField(null=True)
-    # Страница 9
+    # Шаг 9
     water_track = fields.CharField(max_length=6, null=True)  # auto | manual | none
     water_goal_ml = fields.SmallIntField(null=True)
-    # Страница 10
+    # Шаг 10
     medical_conditions = fields.JSONField(default=list)
 
     class Meta:
