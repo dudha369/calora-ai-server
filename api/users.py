@@ -5,10 +5,12 @@ GET /api/users/me — текущий пользователь + профиль +
 
 from fastapi import APIRouter, Depends
 from aiogram.utils.web_app import WebAppInitData
-from tortoise.exceptions import DoesNotExist
 
 from .utils import auth, get_or_create_user
-from db import UserSchema, UserProfileSchema, DailyGoalSchema, OnboardingDraft
+from db import (
+    UserSchema, UserProfile, UserProfileSchema,
+    DailyGoal, DailyGoalSchema, OnboardingDraft,
+)
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -23,17 +25,19 @@ async def get_me(auth_data: WebAppInitData = Depends(auth)):
         language_code=tg_user.language_code or "en",
     )
 
-    try:
-        profile = await user.profile
-        profile_data = (await UserProfileSchema.from_tortoise_orm(profile)).model_dump()
-    except DoesNotExist:
-        profile_data = None
+    # get_or_none надёжнее, чем user.profile — обратная связь в Tortoise
+    # может вернуть None вместо DoesNotExist в зависимости от версии ORM.
+    profile = await UserProfile.get_or_none(user_id=user.telegram_id)
+    profile_data = (
+        (await UserProfileSchema.from_tortoise_orm(profile)).model_dump()
+        if profile else None
+    )
 
-    try:
-        goal = await user.daily_goal
-        goal_data = (await DailyGoalSchema.from_tortoise_orm(goal)).model_dump()
-    except DoesNotExist:
-        goal_data = None
+    goal = await DailyGoal.get_or_none(user_id=user.telegram_id)
+    goal_data = (
+        (await DailyGoalSchema.from_tortoise_orm(goal)).model_dump()
+        if goal else None
+    )
 
     needs_onboarding = profile_data is None
 
