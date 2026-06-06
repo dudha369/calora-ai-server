@@ -11,7 +11,7 @@ router = Router(name="common")
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    await message.answer("👋Hello!\nOpen the mini-app:", reply_markup=main_markup)
+    await message.answer("👋 Hello!\n💚 Open the mini-app:", reply_markup=main_markup)
 
     asyncio.create_task(_save_user(message))
 

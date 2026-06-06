@@ -41,4 +41,6 @@ class UserProfile(Model):
         table = "user_profiles"
 
 
-UserProfileSchema = pydantic_model_creator(UserProfile, name="UserProfile", exclude=("user",))
+UserProfileSchema = pydantic_model_creator(
+    UserProfile, name="UserProfile", exclude=("user",)
+)

@@ -8,8 +8,12 @@ from aiogram.utils.web_app import WebAppInitData
 
 from .utils import auth, get_or_create_user
 from db import (
-    UserSchema, UserProfile, UserProfileSchema,
-    DailyGoal, DailyGoalSchema, OnboardingDraft,
+    UserSchema,
+    UserProfile,
+    UserProfileSchema,
+    DailyGoal,
+    DailyGoalSchema,
+    OnboardingDraft,
 )
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -30,13 +34,13 @@ async def get_me(auth_data: WebAppInitData = Depends(auth)):
     profile = await UserProfile.get_or_none(user_id=user.telegram_id)
     profile_data = (
         (await UserProfileSchema.from_tortoise_orm(profile)).model_dump()
-        if profile else None
+        if profile
+        else None
     )
 
     goal = await DailyGoal.get_or_none(user_id=user.telegram_id)
     goal_data = (
-        (await DailyGoalSchema.from_tortoise_orm(goal)).model_dump()
-        if goal else None
+        (await DailyGoalSchema.from_tortoise_orm(goal)).model_dump() if goal else None
     )
 
     needs_onboarding = profile_data is None
