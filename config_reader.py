@@ -39,6 +39,7 @@ TORTOISE_ORM = {
             "models": [
                 "db.models.user",
                 "db.models.user_profile",
+                "db.models.onboarding_draft",
                 "db.models.daily_goal",
                 "db.models.weight_history",
                 "db.models.food_log",
