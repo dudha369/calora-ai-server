@@ -58,26 +58,20 @@ def _calc_goals_local(profile: UserProfile) -> dict:
     }
 
 
-# ─── Schemas ────────────────────────────────────────────────────────────────
-
-
 class StepDataIn(BaseModel):
     step: int
     gender: Optional[str] = None
     age: Optional[int] = None
-    height: Optional[int] = None  # всегда в см
-    weight: Optional[float] = None  # всегда в кг
+    height: Optional[int] = None
+    weight: Optional[float] = None
     goal: Optional[str] = None
-    target_weight: Optional[float] = None  # всегда в кг (конвертация на фронте)
+    target_weight: Optional[float] = None
     activity_level: Optional[float] = None
     dietary_restrictions: Optional[list[str]] = None
     allergy_note: Optional[str] = None
     water_track: Optional[str] = None
     water_goal: Optional[int] = None
     medical_conditions: Optional[list[str]] = None
-
-
-# ─── Helpers ────────────────────────────────────────────────────────────────
 
 
 def _draft_to_response(draft: OnboardingDraft) -> dict:
@@ -95,9 +89,6 @@ def _draft_to_response(draft: OnboardingDraft) -> dict:
         "water_goal": draft.water_goal_ml,
         "medical_conditions": draft.medical_conditions,
     }
-
-
-# ─── Endpoints ──────────────────────────────────────────────────────────────
 
 
 @router.get("/progress")

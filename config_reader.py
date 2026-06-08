@@ -22,6 +22,11 @@ class Config(BaseSettings):
     APP_HOST: str = "localhost"
     APP_PORT: int = 8080
 
+    B2_ENDPOINT: str = ""
+    B2_KEY_ID: SecretStr = SecretStr("")
+    B2_APPLICATION_KEY: SecretStr = SecretStr("")
+    B2_BUCKET: str = ""
+
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",
         env_file_encoding="utf-8",

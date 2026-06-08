@@ -2,16 +2,12 @@ from fastapi import Request, HTTPException
 from aiogram.utils.web_app import WebAppInitData, safe_parse_webapp_init_data
 from config_reader import config
 from db import User
-
-from typing import Any, Optional
+from typing import Optional
 
 
 def auth(request: Request) -> Optional[WebAppInitData]:
-    """Валидирует Telegram initData из заголовка."""
-
     if request.method == "OPTIONS":
         return None
-
     try:
         auth_string = request.headers.get("initData")
         if not auth_string:
@@ -28,13 +24,9 @@ def auth(request: Request) -> Optional[WebAppInitData]:
 async def get_or_create_user(
     telegram_id: int,
     full_name: str,
-    username: Any[str, None] = None,
+    username: Optional[str] = None,
     language_code: str = "ru",
 ) -> User:
-    """
-    Возвращает существующего пользователя или создаёт нового.
-    При каждом запросе обновляет full_name и username.
-    """
     user, created = await User.get_or_create(
         telegram_id=telegram_id,
         defaults={
@@ -45,10 +37,12 @@ async def get_or_create_user(
     )
 
     if not created:
-        await User.filter(telegram_id=telegram_id).update(
-            full_name=full_name,
-            username=username,
-        )
+        update = {"full_name": full_name}
+        if username is not None:
+            update["username"] = username
+        if language_code:
+            update["language_code"] = language_code
+        await User.filter(telegram_id=telegram_id).update(**update)
         await user.refresh_from_db()
 
     return user
