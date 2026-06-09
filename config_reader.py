@@ -29,6 +29,7 @@ class Config(BaseSettings):
 
     WHITELIST_ENABLED: bool = False
     WHITELIST_IDS: str = ""
+    ADMIN_TELEGRAM_ID: int = 0
 
     @property
     def whitelist_ids(self) -> set[int]:
