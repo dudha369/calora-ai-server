@@ -27,6 +27,21 @@ class Config(BaseSettings):
     B2_APPLICATION_KEY: SecretStr = SecretStr("")
     B2_BUCKET: str = ""
 
+    WHITELIST_ENABLED: bool = False
+    WHITELIST_IDS: str = ""
+
+    @property
+    def whitelist_ids(self) -> set[int]:
+        """Return the set of whitelisted Telegram user IDs (parsed from env)."""
+        if not self.WHITELIST_IDS.strip():
+            return set()
+        result: set[int] = set()
+        for part in self.WHITELIST_IDS.split(","):
+            part = part.strip()
+            if part.isdigit():
+                result.add(int(part))
+        return result
+
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",
         env_file_encoding="utf-8",

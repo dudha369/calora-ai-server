@@ -12,9 +12,19 @@ def auth(request: Request) -> Optional[WebAppInitData]:
         auth_string = request.headers.get("initData")
         if not auth_string:
             raise HTTPException(status_code=401, detail={"error": "Unauthorized"})
-        return safe_parse_webapp_init_data(
+
+        init_data = safe_parse_webapp_init_data(
             config.BOT_TOKEN.get_secret_value(), auth_string
         )
+
+        if config.WHITELIST_ENABLED and init_data.user:
+            if init_data.user.id not in config.whitelist_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "Access denied", "reason": "not_whitelisted"},
+                )
+
+        return init_data
     except HTTPException:
         raise
     except Exception:
