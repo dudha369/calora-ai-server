@@ -7,7 +7,7 @@ response_mime_type="application/json" — гарантирует чистый JS
 import json
 from google import genai
 from google.genai import types
-from config_reader import config
+from config import config
 
 _client = genai.Client(api_key=config.GEMINI_API_KEY.get_secret_value())
 MODEL = "gemini-2.5-flash"

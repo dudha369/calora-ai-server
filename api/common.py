@@ -1,7 +1,7 @@
 import asyncio
 from fastapi import APIRouter, Request
 from aiogram.types import Update
-from config_reader import bot, dp
+from bot_instance import bot, dp
 
 router = APIRouter()
 

@@ -1,6 +1,6 @@
 from aiogram.types import WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from config_reader import config
+from config import config
 
 main_markup = (
     InlineKeyboardBuilder().button(

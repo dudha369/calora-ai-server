@@ -4,7 +4,8 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 
 from bot.keyboards import main_markup
-from config_reader import config, bot
+from config import config
+from bot_instance import bot
 from db import User
 
 router = Router(name="common")

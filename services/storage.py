@@ -12,7 +12,7 @@ import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 
-from config_reader import config
+from config import config
 
 logger = logging.getLogger(__name__)
 

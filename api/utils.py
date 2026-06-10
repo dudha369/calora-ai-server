@@ -1,6 +1,6 @@
 from fastapi import Request, HTTPException
 from aiogram.utils.web_app import WebAppInitData, safe_parse_webapp_init_data
-from config_reader import config
+from config import config
 from db import User
 from typing import Optional
 

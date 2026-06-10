@@ -1,14 +1,14 @@
 import os
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
 
-from bot.handlers import setup_routers as setup_bot_routers
 from api import setup_routers as setup_api_routers
-from config_reader import config, dp, app
+from bot.handlers import setup_routers as setup_bot_routers
 
-ALLOWED_ORIGINS = [
-    config.WEBAPP_URL.get_secret_value(),
-]
+from app import app
+from bot_instance import dp
+from config import config
+
+ALLOWED_ORIGINS = [config.WEBAPP_URL.get_secret_value()]
 
 if os.getenv("ENV", "production") == "development":
     ALLOWED_ORIGINS += [
@@ -29,7 +29,7 @@ dp.include_router(setup_bot_routers())
 app.include_router(setup_api_routers())
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", config.APP_PORT))
-    host = config.APP_HOST
+    import uvicorn
 
-    uvicorn.run(app, host=host, port=port)
+    port = int(os.environ.get("PORT", config.APP_PORT))
+    uvicorn.run(app, host=config.APP_HOST, port=port)
