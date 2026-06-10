@@ -19,10 +19,10 @@ if os.getenv("ENV", "production") == "development":
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["initData", "Content-Type", "Accept"],
 )
 
 dp.include_router(setup_bot_routers())

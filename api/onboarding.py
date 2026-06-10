@@ -9,6 +9,7 @@ from aiogram.utils.web_app import WebAppInitData
 from .utils import auth, get_or_create_user
 from .profile import _recalculate_goals
 from db import OnboardingDraft, UserProfile, DailyGoal, WeightHistory
+from ai.services.goal_calculator import calculate_base_goals
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
@@ -30,32 +31,6 @@ ACTIVITY_MULTIPLIERS = {
 
 
 # ─── Fallback: Mifflin-St Jeor без AI ───────────────────────────────────────
-
-
-def _calc_goals_local(profile: UserProfile) -> dict:
-    weight = float(profile.weight_kg)
-    height = profile.height_cm
-    age = profile.age
-    gender = profile.gender
-    activity = ACTIVITY_MULTIPLIERS.get(profile.activity_level, 1.55)
-    goal = profile.goal_type
-
-    bmr = 10 * weight + 6.25 * height - 5 * age + (5 if gender == "male" else -161)
-    tdee = bmr * activity
-    calories = int(
-        tdee - 500 if goal == "lose" else tdee + 300 if goal == "gain" else tdee
-    )
-    protein_g = round(weight * 1.8, 1)
-    fat_g = round(calories * 0.30 / 9, 1)
-    carbs_g = round((calories - protein_g * 4 - fat_g * 9) / 4, 1)
-    water_ml = max(int(weight * 33), 1500)
-    return {
-        "calories": calories,
-        "protein_g": protein_g,
-        "fat_g": fat_g,
-        "carbs_g": carbs_g,
-        "water_ml": water_ml,
-    }
 
 
 class StepDataIn(BaseModel):
@@ -210,7 +185,14 @@ async def complete_onboarding(auth_data: WebAppInitData = Depends(auth)):
     except Exception as e:
         logger.error(f"AI goal calculation failed for user {user.telegram_id}: {e}")
         # Fallback: Mifflin-St Jeor без AI
-        goals = _calc_goals_local(profile)
+        goals = calculate_base_goals({
+            "gender": profile.gender,
+            "age": profile.age,
+            "height_cm": profile.height_cm,
+            "weight_kg": float(profile.weight_kg),
+            "goal_type": profile.goal_type,
+            "activity_level": profile.activity_level,
+        })
         goal, _ = await DailyGoal.get_or_create(
             user_id=user.telegram_id,
             defaults={**goals, "ai_tip": None},

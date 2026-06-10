@@ -33,7 +33,7 @@ class FoodItemIn(BaseModel):
 
 class FoodLogIn(BaseModel):
     log_date: str
-    items: list
+    items: list[FoodItemIn]
     photo_key: Optional[str] = None   # ключ объекта в B2, не URL
 
 

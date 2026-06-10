@@ -27,8 +27,6 @@ class ProfileIn(BaseModel):
     weight_kg: float
     goal_type: str
     activity_level: str  # 'sedentary' | 'light' | 'moderate' | 'active' | 'extreme'
-    height_unit: str = "cm"
-    weight_unit: str = "kg"
     target_weight_kg: Optional[float] = None
     water_track: str = "auto"  # 'auto' | 'manual' | 'none'
     water_goal_ml: Optional[int] = None
@@ -80,8 +78,6 @@ async def create_profile(body: ProfileIn, auth_data: WebAppInitData = Depends(au
         age=body.age,
         height_cm=body.height_cm,
         weight_kg=Decimal(str(body.weight_kg)),
-        height_unit=body.height_unit,
-        weight_unit=body.weight_unit,
         goal_type=body.goal_type,
         target_weight_kg=(
             Decimal(str(body.target_weight_kg)) if body.target_weight_kg else None
@@ -128,8 +124,6 @@ async def update_profile(body: ProfileIn, auth_data: WebAppInitData = Depends(au
         age=body.age,
         height_cm=body.height_cm,
         weight_kg=new_weight,
-        height_unit=body.height_unit,
-        weight_unit=body.weight_unit,
         goal_type=body.goal_type,
         target_weight_kg=(
             Decimal(str(body.target_weight_kg)) if body.target_weight_kg else None
