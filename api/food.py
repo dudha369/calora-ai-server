@@ -90,12 +90,12 @@ async def create_log(body: FoodLogIn, auth_data: WebAppInitData = Depends(auth))
     for item in body.items:
         await FoodItem.create(
             food_log_id=food_log.id,
-            food_name=item["food_name"],
-            portion_g=Decimal(str(item["portion_g"])),
-            calories=item["calories"],
-            protein_g=Decimal(str(item["protein_g"])),
-            fat_g=Decimal(str(item["fat_g"])),
-            carbs_g=Decimal(str(item["carbs_g"])),
+            food_name=item.food_name,
+            portion_g=Decimal(str(item.portion_g)),
+            calories=item.calories,
+            protein_g=Decimal(str(item.protein_g)),
+            fat_g=Decimal(str(item.fat_g)),
+            carbs_g=Decimal(str(item.carbs_g)),
         )
 
     await _recalc_totals(food_log)
