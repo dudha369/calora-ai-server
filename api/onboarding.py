@@ -201,20 +201,3 @@ async def complete_onboarding(auth_data: WebAppInitData = Depends(auth)):
             await DailyGoal.filter(user_id=user.telegram_id).update(**goals)
 
     return {"ok": True}
-
-
-@router.delete("/reset")
-async def reset_onboarding(auth_data: WebAppInitData = Depends(auth)):
-    """
-    DEBUG: сбрасывает онбординг — удаляет UserProfile, DailyGoal и черновик.
-    После этого при следующем GET /api/users/me вернётся needs_onboarding: true.
-    """
-    user = await get_or_create_user(
-        auth_data.user.id,
-        auth_data.user.first_name or "Unknown",
-        auth_data.user.username,
-    )
-    await UserProfile.filter(user_id=user.telegram_id).delete()
-    await DailyGoal.filter(user_id=user.telegram_id).delete()
-    await OnboardingDraft.filter(user_id=user.telegram_id).delete()
-    return {"ok": True, "message": "Onboarding reset. Open app to start over."}

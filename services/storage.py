@@ -99,3 +99,40 @@ async def get_photo_url(object_key: Optional[str]) -> Optional[str]:
     except (BotoCoreError, ClientError) as e:
         logger.error(f"B2 presign failed for key {object_key}: {e}")
         return None
+
+
+def _sync_delete(object_key: str) -> None:
+    client = _make_client()
+    client.delete_object(Bucket=config.B2_BUCKET, Key=object_key)
+
+
+def _sync_delete_many(object_keys: list[str]) -> None:
+    """S3 delete_objects — до 1000 ключей за один запрос."""
+    client = _make_client()
+    for i in range(0, len(object_keys), 1000):
+        batch = object_keys[i : i + 1000]
+        client.delete_objects(
+            Bucket=config.B2_BUCKET,
+            Delete={"Objects": [{"Key": k} for k in batch], "Quiet": True},
+        )
+
+
+async def delete_food_photo(object_key: Optional[str]) -> None:
+    """Удаляет одно фото (например, если еда на нём не распознана)."""
+    if not object_key or not _is_configured():
+        return
+    try:
+        await asyncio.to_thread(_sync_delete, object_key)
+    except (BotoCoreError, ClientError) as e:
+        logger.error(f"B2 delete failed for key {object_key}: {e}")
+
+
+async def delete_food_photos(object_keys: list[str]) -> None:
+    """Батч-удаление фото пользователя (используется при удалении аккаунта)."""
+    keys = [k for k in object_keys if k]
+    if not keys or not _is_configured():
+        return
+    try:
+        await asyncio.to_thread(_sync_delete_many, keys)
+    except (BotoCoreError, ClientError) as e:
+        logger.error(f"B2 batch delete failed ({len(keys)} keys): {e}")

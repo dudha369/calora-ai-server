@@ -17,7 +17,7 @@ from aiogram.utils.web_app import WebAppInitData
 from .utils import auth, get_or_create_user
 from db import FoodLog, FoodLogSchema, FoodItem, FoodItemSchema
 from ai.services.food_analyzer import analyze_food_photo
-from services.storage import upload_food_photo, get_photo_url
+from services.storage import upload_food_photo, get_photo_url, delete_food_photo
 
 router = APIRouter(prefix="/api/food", tags=["food"])
 
@@ -37,6 +37,56 @@ class FoodLogIn(BaseModel):
     photo_key: Optional[str] = None   # ключ объекта в B2, не URL
 
 
+class BarcodeLogIn(BaseModel):
+    log_date: str
+    items: list[FoodItemIn]   # одна позиция, посчитанная на фронте из OFF-данных
+
+
+@router.post("/log-barcode")
+async def create_log_from_barcode(
+    body: BarcodeLogIn, auth_data: WebAppInitData = Depends(auth)
+):
+    """
+    Логирование еды по штрихкоду (OpenFoodFacts).
+    В отличие от /log, photo_url всегда NULL — фото со сканера
+    штрихкода не несёт пищевой информации и не сохраняется в B2.
+    """
+    user = await get_or_create_user(
+        auth_data.user.id, auth_data.user.first_name or "Unknown"
+    )
+    log_date = date.fromisoformat(body.log_date)
+
+    food_log = await FoodLog.create(
+        user_id=user.telegram_id,
+        log_date=log_date,
+        photo_url=None,
+    )
+
+    for item in body.items:
+        await FoodItem.create(
+            food_log_id=food_log.id,
+            food_name=item.food_name,
+            portion_g=Decimal(str(item.portion_g)),
+            calories=item.calories,
+            protein_g=Decimal(str(item.protein_g)),
+            fat_g=Decimal(str(item.fat_g)),
+            carbs_g=Decimal(str(item.carbs_g)),
+        )
+
+    await _recalc_totals(food_log)
+    await food_log.refresh_from_db()
+
+    items_data = await FoodItemSchema.from_queryset(
+        FoodItem.filter(food_log_id=food_log.id)
+    )
+    log_dict = (await FoodLogSchema.from_tortoise_orm(food_log)).model_dump()
+
+    return {
+        "log": {**log_dict, "photo_url": None},
+        "items": [i.model_dump() for i in items_data],
+    }
+
+
 async def _recalc_totals(food_log: FoodLog) -> None:
     items = await FoodItem.filter(food_log_id=food_log.id).all()
     await FoodLog.filter(id=food_log.id).update(
@@ -52,14 +102,6 @@ async def analyze_photo(
     file: UploadFile = File(...),
     auth_data: WebAppInitData = Depends(auth),
 ):
-    """
-    Принимает фото, параллельно:
-    - отправляет в Gemini для анализа КБЖУ
-    - загружает в Backblaze B2 (приватный бакет)
-
-    Возвращает найденные блюда + photo_key (ключ объекта в B2).
-    photo_key нужно передать в POST /log чтобы фото привязалось к записи.
-    """
     image_bytes = await file.read()
     mime_type = file.content_type or "image/jpeg"
 
@@ -69,6 +111,8 @@ async def analyze_photo(
     )
 
     if "error" in result:
+        # Еда не распознана — фото бесполезно, не оставляем мусор в B2
+        await delete_food_photo(photo_key)
         raise HTTPException(status_code=422, detail=result["error"])
 
     return {**result, "photo_key": photo_key}

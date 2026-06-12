@@ -1,6 +1,6 @@
 """
-GET /api/users/me — текущий пользователь + профиль + цели (всё в одном запросе).
-Вызывается при каждом открытии Mini App.
+GET    /api/users/me — текущий пользователь + профиль + цели (всё в одном запросе).
+DELETE /api/users/me — полное удаление аккаунта (необратимо).
 """
 
 from fastapi import APIRouter, Depends
@@ -8,13 +8,16 @@ from aiogram.utils.web_app import WebAppInitData
 
 from .utils import auth, get_or_create_user
 from db import (
+    User,
     UserSchema,
     UserProfile,
     UserProfileSchema,
     DailyGoal,
     DailyGoalSchema,
     OnboardingDraft,
+    FoodLog,
 )
+from services.storage import delete_food_photos
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -60,3 +63,34 @@ async def get_me(auth_data: WebAppInitData = Depends(auth)):
         "needs_onboarding": needs_onboarding,
         "onboarding_step": onboarding_step,
     }
+
+
+@router.delete("/me")
+async def delete_account(auth_data: WebAppInitData = Depends(auth)):
+    """
+    Полностью удаляет аккаунт пользователя.
+
+    1. Собирает ключи всех фото еды из FoodLog.photo_url и удаляет их из B2 —
+       внешнее хранилище не входит в транзакцию БД, поэтому чистим его первым,
+       пока ключи ещё доступны.
+    2. Удаляет строку User. ON DELETE CASCADE на всех связанных таблицах
+       (user_profiles, daily_goals, weight_history, food_logs → food_items,
+       water_logs, quests, ai_tips, onboarding_drafts) каскадно удаляет
+       абсолютно все данные пользователя одной транзакцией.
+
+    После этого следующий GET /api/users/me пересоздаст User через
+    get_or_create_user — пользователь снова попадёт на онбординг.
+    """
+    user = await get_or_create_user(
+        auth_data.user.id, auth_data.user.first_name or "Unknown"
+    )
+
+    photo_keys = await FoodLog.filter(
+        user_id=user.telegram_id, photo_url__isnull=False
+    ).values_list("photo_url", flat=True)
+
+    await delete_food_photos(list(photo_keys))
+
+    await User.filter(telegram_id=user.telegram_id).delete()
+
+    return {"ok": True}
