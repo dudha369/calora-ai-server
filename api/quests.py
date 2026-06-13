@@ -3,36 +3,32 @@ GET  /api/quests         — активные квесты пользовате�
 POST /api/quests/generate — сгенерировать новые квесты (вызывать раз в неделю)
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends
-from aiogram.utils.web_app import WebAppInitData
 
-from .utils import auth, get_or_create_user
-from db import Quest, QuestSchema, UserProfile, DailyGoal
+from fastapi import APIRouter, Depends
+
+from .utils import get_current_user
+from db import User, Quest, QuestSchema, UserProfile, DailyGoal
 from ai.services.quest_generator import generate_weekly_quests
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quests", tags=["quests"])
 
 
 @router.get("")
-async def get_active_quests(auth_data: WebAppInitData = Depends(auth)):
+async def get_active_quests(user: User = Depends(get_current_user)):
     """Активные квесты + недавно выполненные (для показа в UI)."""
-    user = await get_or_create_user(
-        auth_data.user.id, auth_data.user.first_name or "Unknown"
-    )
     quests = await Quest.filter(user_id=user.telegram_id, status="active").all()
     return [(await QuestSchema.from_tortoise_orm(q)).model_dump() for q in quests]
 
 
 @router.post("/generate")
-async def generate_quests(auth_data: WebAppInitData = Depends(auth)):
+async def generate_quests(user: User = Depends(get_current_user)):
     """
     Генерирует 3 новых квеста через Gemini.
     Вызывай с клиента раз в неделю (или при истечении всех квестов).
     """
-    user = await get_or_create_user(
-        auth_data.user.id, auth_data.user.first_name or "Unknown"
-    )
     profile = await UserProfile.get_or_none(user_id=user.telegram_id)
     goal = await DailyGoal.get_or_none(user_id=user.telegram_id)
 
