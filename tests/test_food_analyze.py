@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient
 
-from api.food import _rate_limits
+from api.utils import _rate_limits
 
 
 @pytest.fixture(autouse=True)

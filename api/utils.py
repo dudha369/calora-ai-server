@@ -1,11 +1,14 @@
 """
-Общие утилиты API: авторизация и работа с пользователем.
+Общие утилиты API: авторизация, работа с пользователем, валидация.
 
 get_current_user — единственная точка входа для эндпоинтов.
 Заменяет пару Depends(auth) + get_or_create_user() одним вызовом.
 """
 
 import logging
+import time
+from collections import defaultdict
+from datetime import date as date_type
 from typing import Optional
 
 from fastapi import Request, HTTPException, Depends
@@ -15,6 +18,75 @@ from config import config
 from db import User
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Rate Limiting ───────────────────────────────────────────────────────────
+
+# {user_id: [timestamp, ...]}
+_rate_limits: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
+_last_cleanup: float = time.monotonic()
+_CLEANUP_INTERVAL = 300  # 5 минут
+
+
+def _cleanup_stale_entries() -> None:
+    """Удаляет записи пользователей без активности за последние 5 минут."""
+    global _last_cleanup
+    now = time.monotonic()
+    if now - _last_cleanup < _CLEANUP_INTERVAL:
+        return
+    _last_cleanup = now
+
+    for bucket_key in list(_rate_limits.keys()):
+        bucket = _rate_limits[bucket_key]
+        for uid in list(bucket.keys()):
+            bucket[uid] = [ts for ts in bucket[uid] if ts > now - 60]
+            if not bucket[uid]:
+                del bucket[uid]
+        if not bucket:
+            del _rate_limits[bucket_key]
+
+
+def check_rate_limit(
+    user_id: int,
+    bucket: str = "default",
+    max_per_minute: int = 5,
+) -> None:
+    """
+    Проверяет rate limit: max_per_minute запросов в минуту на юзера.
+    Разные bucket'ы для разных эндпоинтов.
+    """
+    _cleanup_stale_entries()
+
+    now = time.monotonic()
+    window = now - 60
+    timestamps = _rate_limits[bucket][user_id]
+    _rate_limits[bucket][user_id] = [ts for ts in timestamps if ts > window]
+    if len(_rate_limits[bucket][user_id]) >= max_per_minute:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many requests. Max {max_per_minute} per minute.",
+        )
+    _rate_limits[bucket][user_id].append(now)
+
+
+# ─── Date Validation ─────────────────────────────────────────────────────────
+
+
+def parse_date(value: str) -> date_type:
+    """
+    Парсит строку YYYY-MM-DD в date. Бросает HTTP 422 при невалидном формате.
+    Используй вместо голого date.fromisoformat() в эндпоинтах.
+    """
+    try:
+        return date_type.fromisoformat(value)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid date format: '{value}'. Expected YYYY-MM-DD.",
+        )
+
+
+# ─── Auth ─────────────────────────────────────────────────────────────────────
 
 
 def auth(request: Request) -> WebAppInitData:
@@ -48,6 +120,9 @@ def auth(request: Request) -> WebAppInitData:
         raise
     except Exception:
         raise HTTPException(status_code=401, detail={"error": "Unauthorized"})
+
+
+# ─── User ─────────────────────────────────────────────────────────────────────
 
 
 async def get_or_create_user(

@@ -3,21 +3,20 @@ POST /api/food/analyze    — анализ фото через Gemini (не со
 POST /api/food/log        — сохранить запись еды
 POST /api/food/log-barcode — сохранить запись по штрихкоду
 GET  /api/food/{date}     — все записи за дату (YYYY-MM-DD)
-DELETE /api/food/{log_id} — удалить запись
+DELETE /api/food/{log_id} — удалить запись (+ фото из B2)
+DELETE /api/food/photo/{photo_key:path} — удалить неиспользованное фото
 """
 
 import asyncio
 import logging
-import time
-from collections import defaultdict
-from datetime import date
+import re
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from pydantic import BaseModel
 
-from .utils import auth, get_current_user
+from .utils import auth, get_current_user, check_rate_limit, parse_date
 from db import User, FoodLog, FoodLogSchema, FoodItem, FoodItemSchema
 from ai.services.food_analyzer import analyze_food_photo
 from services.storage import upload_food_photo, get_photo_url, delete_food_photo
@@ -25,29 +24,14 @@ from services.storage import upload_food_photo, get_photo_url, delete_food_photo
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/food", tags=["food"])
 
-# ─── Rate limiting (in-memory, per user) ─────────────────────────────────────
+# ─── Constants ────────────────────────────────────────────────────────────────
 
 MAX_ANALYZE_PER_MINUTE = 5
 MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 
-# {user_id: [timestamp, ...]}
-_rate_limits: dict[int, list[float]] = defaultdict(list)
-
-
-def _check_rate_limit(user_id: int) -> None:
-    """Проверяет rate limit: MAX_ANALYZE_PER_MINUTE запросов в минуту на юзера."""
-    now = time.monotonic()
-    window = now - 60
-    timestamps = _rate_limits[user_id]
-    # Чистим старые записи
-    _rate_limits[user_id] = [ts for ts in timestamps if ts > window]
-    if len(_rate_limits[user_id]) >= MAX_ANALYZE_PER_MINUTE:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many requests. Max {MAX_ANALYZE_PER_MINUTE} analyses per minute.",
-        )
-    _rate_limits[user_id].append(now)
+# Паттерн валидного photo_key: food/{user_id}/{uuid}.{ext}
+_PHOTO_KEY_RE = re.compile(r"^food/\d+/[a-f0-9]+\.\w+$")
 
 
 # ─── Pydantic models ─────────────────────────────────────────────────────────
@@ -93,7 +77,7 @@ async def _create_log_with_items(
     photo_key: Optional[str] = None,
 ) -> dict:
     """Общая логика создания FoodLog + FoodItems для /log и /log-barcode."""
-    log_date = date.fromisoformat(body_log_date)
+    log_date = parse_date(body_log_date)
 
     food_log = await FoodLog.create(
         user_id=user.telegram_id,
@@ -148,7 +132,7 @@ async def analyze_photo(
     user: User = Depends(get_current_user),
 ):
     # ── Rate limiting ──
-    _check_rate_limit(user.telegram_id)
+    check_rate_limit(user.telegram_id, bucket="analyze", max_per_minute=MAX_ANALYZE_PER_MINUTE)
 
     # ── MIME validation ──
     mime_type = file.content_type or "image/jpeg"
@@ -188,7 +172,7 @@ async def create_log(body: FoodLogIn, user: User = Depends(get_current_user)):
 
 @router.get("/{log_date}")
 async def get_logs_by_date(log_date: str, user: User = Depends(get_current_user)):
-    d = date.fromisoformat(log_date)
+    d = parse_date(log_date)
     logs = await FoodLog.filter(
         user_id=user.telegram_id, log_date=d
     ).prefetch_related("items")
@@ -222,9 +206,50 @@ async def get_logs_by_date(log_date: str, user: User = Depends(get_current_user)
     }
 
 
+@router.delete("/photo/{photo_key:path}")
+async def delete_orphan_photo(photo_key: str, user: User = Depends(get_current_user)):
+    """
+    Удаляет фото из B2, которое не было привязано к FoodLog.
+
+    Вызывается клиентом когда пользователь отменяет модальное окно
+    подтверждения после /analyze — фото уже загружено в B2, но
+    пользователь не подтвердил блюдо, поэтому photo_key не попал в БД.
+
+    Безопасность: проверяем что photo_key начинается с food/{user_id}/
+    """
+    # Валидация формата ключа
+    if not _PHOTO_KEY_RE.match(photo_key):
+        raise HTTPException(status_code=400, detail="Invalid photo key format")
+
+    # Проверяем что фото принадлежит текущему пользователю
+    expected_prefix = f"food/{user.telegram_id}/"
+    if not photo_key.startswith(expected_prefix):
+        raise HTTPException(status_code=403, detail="Cannot delete another user's photo")
+
+    # Проверяем что фото не используется ни одним FoodLog
+    existing = await FoodLog.filter(
+        user_id=user.telegram_id, photo_url=photo_key
+    ).exists()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="Photo is in use by a food log. Delete the log instead.",
+        )
+
+    await delete_food_photo(photo_key)
+    return {"deleted": True}
+
+
 @router.delete("/{log_id}")
 async def delete_log(log_id: int, user: User = Depends(get_current_user)):
-    deleted = await FoodLog.filter(id=log_id, user_id=user.telegram_id).delete()
-    if not deleted:
+    # Получаем запись перед удалением, чтобы почистить фото из B2
+    food_log = await FoodLog.get_or_none(id=log_id, user_id=user.telegram_id)
+    if not food_log:
         raise HTTPException(status_code=404, detail="Log not found")
+
+    # Удаляем фото из B2 (если есть)
+    if food_log.photo_url:
+        await delete_food_photo(food_log.photo_url)
+
+    await FoodLog.filter(id=log_id).delete()
     return {"deleted": True}

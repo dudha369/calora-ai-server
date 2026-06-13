@@ -24,6 +24,14 @@ async def test_daily_stats_empty(client: AsyncClient, seeded_user):
 
 
 @pytest.mark.asyncio
+async def test_daily_stats_invalid_date(client: AsyncClient, seeded_user):
+    """GET /api/stats/daily returns 422 for invalid date."""
+    resp = await client.get("/api/stats/daily?date=nope")
+    assert resp.status_code == 422
+    assert "Invalid date" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_daily_stats_with_data(client: AsyncClient, seeded_user):
     """GET /api/stats/daily aggregates food and water."""
     d = "2026-06-12"
@@ -70,6 +78,14 @@ async def test_active_dates(client: AsyncClient, seeded_user):
     assert "2026-06-10" in dates
     assert "2026-06-12" in dates
     assert "2026-06-11" not in dates
+
+
+@pytest.mark.asyncio
+async def test_active_dates_invalid_date(client: AsyncClient, seeded_user):
+    """GET /api/stats/active-dates returns 422 for invalid date."""
+    resp = await client.get("/api/stats/active-dates?from=bad&to=2026-06-30")
+    assert resp.status_code == 422
+    assert "Invalid date" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

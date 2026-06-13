@@ -2,13 +2,19 @@
 Базовый клиент Gemini 2.5 Flash.
 """
 
+import asyncio
 import json
+
 from google import genai
 from google.genai import types
 from config import config
 
 _client = genai.Client(api_key=config.GEMINI_API_KEY.get_secret_value())
 MODEL = "gemini-2.5-flash"
+
+# Таймаут на ответ от Gemini (секунды).
+# Если API зависнет — запрос упадёт с TimeoutError вместо бесконечного ожидания.
+GEMINI_TIMEOUT = 30
 
 
 def _parse_json(text: str) -> dict:
@@ -48,15 +54,18 @@ def _parse_json(text: str) -> dict:
 
 
 async def send_text(system_prompt: str, user_message: str) -> dict:
-    response = await _client.aio.models.generate_content(
-        model=MODEL,
-        contents=user_message,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=0.4,
-            max_output_tokens=2048,  # было 1000 — для tips/quests достаточно
-            response_mime_type="application/json",
+    response = await asyncio.wait_for(
+        _client.aio.models.generate_content(
+            model=MODEL,
+            contents=user_message,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.4,
+                max_output_tokens=2048,
+                response_mime_type="application/json",
+            ),
         ),
+        timeout=GEMINI_TIMEOUT,
     )
     return _parse_json(response.text)
 
@@ -64,17 +73,20 @@ async def send_text(system_prompt: str, user_message: str) -> dict:
 async def analyze_image(
     system_prompt: str, image_bytes: bytes, mime_type: str = "image/jpeg"
 ) -> dict:
-    response = await _client.aio.models.generate_content(
-        model=MODEL,
-        contents=[
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            "Analyze the food in this image.",
-        ],
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=0.2,
-            max_output_tokens=4096,  # было 1000 — обрезало JSON при длинных русских названиях
-            response_mime_type="application/json",
+    response = await asyncio.wait_for(
+        _client.aio.models.generate_content(
+            model=MODEL,
+            contents=[
+                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                "Analyze the food in this image.",
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.2,
+                max_output_tokens=4096,
+                response_mime_type="application/json",
+            ),
         ),
+        timeout=GEMINI_TIMEOUT,
     )
     return _parse_json(response.text)
