@@ -17,6 +17,17 @@ async def test_add_water(client: AsyncClient, seeded_user):
 
 
 @pytest.mark.asyncio
+async def test_add_water_invalid_date(client: AsyncClient, seeded_user):
+    """POST /api/water returns 422 for invalid date."""
+    resp = await client.post("/api/water", json={
+        "log_date": "garbage",
+        "amount_ml": 250,
+    })
+    assert resp.status_code == 422
+    assert "Invalid date" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_get_water_by_date(client: AsyncClient, seeded_user):
     """GET /api/water/{date} returns all logs for that date."""
     await client.post("/api/water", json={"log_date": "2026-06-12", "amount_ml": 250})
@@ -28,6 +39,14 @@ async def test_get_water_by_date(client: AsyncClient, seeded_user):
     assert data["date"] == "2026-06-12"
     assert len(data["logs"]) == 2
     assert data["total_ml"] == 750
+
+
+@pytest.mark.asyncio
+async def test_get_water_invalid_date(client: AsyncClient, seeded_user):
+    """GET /api/water/{date} returns 422 for invalid date."""
+    resp = await client.get("/api/water/nope")
+    assert resp.status_code == 422
+    assert "Invalid date" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

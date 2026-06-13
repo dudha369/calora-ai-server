@@ -4,11 +4,10 @@ GET  /api/water/{date} — вода за день
 DELETE /api/water/{log_id}
 """
 
-from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .utils import get_current_user
+from .utils import get_current_user, parse_date
 from db import User, WaterLog, WaterLogSchema
 
 router = APIRouter(prefix="/api/water", tags=["water"])
@@ -23,7 +22,7 @@ class WaterIn(BaseModel):
 async def add_water(body: WaterIn, user: User = Depends(get_current_user)):
     log = await WaterLog.create(
         user_id=user.telegram_id,
-        log_date=date.fromisoformat(body.log_date),
+        log_date=parse_date(body.log_date),
         amount_ml=body.amount_ml,
     )
     return (await WaterLogSchema.from_tortoise_orm(log)).model_dump()
@@ -31,7 +30,7 @@ async def add_water(body: WaterIn, user: User = Depends(get_current_user)):
 
 @router.get("/{log_date}")
 async def get_water_by_date(log_date: str, user: User = Depends(get_current_user)):
-    d = date.fromisoformat(log_date)
+    d = parse_date(log_date)
     logs = await WaterLog.filter(user_id=user.telegram_id, log_date=d).all()
     total_ml = sum(l.amount_ml for l in logs)
     return {

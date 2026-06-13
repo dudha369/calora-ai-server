@@ -1,6 +1,7 @@
 """Tests for the food logging endpoints."""
 
 import pytest
+from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient
 from decimal import Decimal
 
@@ -58,6 +59,18 @@ async def test_create_food_log_with_photo_key(client: AsyncClient, seeded_user):
 
 
 @pytest.mark.asyncio
+async def test_create_food_log_invalid_date(client: AsyncClient, seeded_user):
+    """POST /api/food/log returns 422 for invalid date."""
+    resp = await client.post("/api/food/log", json={
+        "log_date": "not-a-date",
+        "items": [{"food_name": "Тест", "portion_g": 100, "calories": 100,
+                    "protein_g": 5, "fat_g": 3, "carbs_g": 10}],
+    })
+    assert resp.status_code == 422
+    assert "Invalid date" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_get_food_by_date(client: AsyncClient, seeded_user):
     """GET /api/food/{date} returns all logs for that date."""
     # Create two logs
@@ -82,6 +95,14 @@ async def test_get_food_by_date(client: AsyncClient, seeded_user):
 
 
 @pytest.mark.asyncio
+async def test_get_food_invalid_date(client: AsyncClient, seeded_user):
+    """GET /api/food/{date} returns 422 for invalid date."""
+    resp = await client.get("/api/food/13-2026-01")
+    assert resp.status_code == 422
+    assert "Invalid date" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_get_food_empty_date(client: AsyncClient, seeded_user):
     """GET /api/food/{date} returns empty for a date with no logs."""
     resp = await client.get("/api/food/2026-01-01")
@@ -92,9 +113,28 @@ async def test_get_food_empty_date(client: AsyncClient, seeded_user):
 
 
 @pytest.mark.asyncio
-async def test_delete_food_log(client: AsyncClient, seeded_user):
-    """DELETE /api/food/{id} removes the log and its items."""
-    # Create
+@patch("api.food.delete_food_photo", new_callable=AsyncMock)
+async def test_delete_food_log_with_photo(mock_del, client: AsyncClient, seeded_user):
+    """DELETE /api/food/{id} also deletes the photo from B2."""
+    resp = await client.post("/api/food/log", json={
+        "log_date": "2026-06-12",
+        "items": [{"food_name": "Тест", "portion_g": 100, "calories": 100,
+                    "protein_g": 5, "fat_g": 3, "carbs_g": 10}],
+        "photo_key": "food/123456789/abc123.jpg",
+    })
+    log_id = resp.json()["log"]["id"]
+
+    resp = await client.delete(f"/api/food/{log_id}")
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is True
+
+    # Verify B2 photo deletion was called
+    mock_del.assert_called_once_with("food/123456789/abc123.jpg")
+
+
+@pytest.mark.asyncio
+async def test_delete_food_log_without_photo(client: AsyncClient, seeded_user):
+    """DELETE /api/food/{id} works for logs without photos."""
     resp = await client.post("/api/food/log", json={
         "log_date": "2026-06-12",
         "items": [{"food_name": "Тест", "portion_g": 100, "calories": 100,
@@ -102,7 +142,6 @@ async def test_delete_food_log(client: AsyncClient, seeded_user):
     })
     log_id = resp.json()["log"]["id"]
 
-    # Delete
     resp = await client.delete(f"/api/food/{log_id}")
     assert resp.status_code == 200
     assert resp.json()["deleted"] is True
@@ -117,3 +156,46 @@ async def test_delete_food_log_not_found(client: AsyncClient, seeded_user):
     """DELETE /api/food/{id} returns 404 for non-existent log."""
     resp = await client.delete("/api/food/99999")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+@patch("api.food.delete_food_photo", new_callable=AsyncMock)
+async def test_delete_orphan_photo(mock_del, client: AsyncClient, seeded_user):
+    """DELETE /api/food/photo/{key} deletes an orphaned photo from B2."""
+    resp = await client.delete("/api/food/photo/food/123456789/abc123def.jpg")
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is True
+    mock_del.assert_called_once_with("food/123456789/abc123def.jpg")
+
+
+@pytest.mark.asyncio
+async def test_delete_orphan_photo_invalid_key(client: AsyncClient, seeded_user):
+    """DELETE /api/food/photo/{key} rejects invalid key format."""
+    resp = await client.delete("/api/food/photo/not-a-valid-key")
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_delete_orphan_photo_wrong_user(client: AsyncClient, seeded_user):
+    """DELETE /api/food/photo/{key} rejects other user's photos."""
+    # seeded_user has telegram_id 123456789, try deleting user 999999's photo
+    resp = await client.delete("/api/food/photo/food/999999/abc123def456.jpg")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+@patch("api.food.delete_food_photo", new_callable=AsyncMock)
+async def test_delete_orphan_photo_in_use(mock_del, client: AsyncClient, seeded_user):
+    """DELETE /api/food/photo/{key} rejects deletion of photo in use by a food log."""
+    # Create a food log with photo
+    photo_key = "food/123456789/abc123def456.jpg"
+    await client.post("/api/food/log", json={
+        "log_date": "2026-06-12",
+        "items": [{"food_name": "Тест", "portion_g": 100, "calories": 100,
+                    "protein_g": 5, "fat_g": 3, "carbs_g": 10}],
+        "photo_key": photo_key,
+    })
+
+    resp = await client.delete(f"/api/food/photo/{photo_key}")
+    assert resp.status_code == 409
+    mock_del.assert_not_called()

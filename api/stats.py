@@ -8,11 +8,10 @@ GET /api/stats/active-dates?from=YYYY-MM-DD&to=YYYY-MM-DD
       в FoodLog или WaterLog. Используется для окраски карусели дат.
 """
 
-from datetime import date as date_type
 from fastapi import APIRouter, Depends, Query
 from tortoise.exceptions import DoesNotExist
 
-from .utils import get_current_user
+from .utils import get_current_user, parse_date
 from db import User, FoodLog, WaterLog, DailyGoal
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -23,7 +22,7 @@ async def get_daily_stats(
     date: str,
     user: User = Depends(get_current_user),
 ):
-    d = date_type.fromisoformat(date)
+    d = parse_date(date)
 
     # — Суммируем FoodLog за день —
     food_logs = await FoodLog.filter(user_id=user.telegram_id, log_date=d).all()
@@ -76,8 +75,8 @@ async def get_active_dates(
     to: str = Query(...),
     user: User = Depends(get_current_user),
 ):
-    d_from = date_type.fromisoformat(from_)
-    d_to = date_type.fromisoformat(to)
+    d_from = parse_date(from_)
+    d_to = parse_date(to)
 
     food_dates = await FoodLog.filter(
         user_id=user.telegram_id,

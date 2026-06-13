@@ -8,12 +8,14 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 
-from .utils import get_current_user
+from .utils import get_current_user, check_rate_limit
 from db import User, AiTip, AiTipSchema, FoodLog, DailyGoal
 from ai.services.tip_generator import generate_daily_tip
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tips", tags=["tips"])
+
+MAX_TIPS_PER_MINUTE = 3
 
 
 @router.get("/today")
@@ -35,6 +37,9 @@ async def get_today_tip(user: User = Depends(get_current_user)):
             "tip": None,
             "message": "Добавь первую запись еды — получишь персональный совет!",
         }
+
+    # Rate limit только перед вызовом Gemini (кешированные ответы не лимитируем)
+    check_rate_limit(user.telegram_id, bucket="tips", max_per_minute=MAX_TIPS_PER_MINUTE)
 
     goal = await DailyGoal.get_or_none(user_id=user.telegram_id)
     goals = {
