@@ -1,7 +1,5 @@
 """
 Базовый клиент Gemini 2.5 Flash.
-response_mime_type="application/json" — гарантирует чистый JSON без think-тегов
-и markdown-обёрток. Самый надёжный способ работать с thinking-моделями.
 """
 
 import json
@@ -14,12 +12,6 @@ MODEL = "gemini-2.5-flash"
 
 
 def _parse_json(text: str) -> dict:
-    """
-    Парсит JSON из ответа. Порядок попыток:
-    1. Прямой парсинг (при response_mime_type=json всегда чистый JSON)
-    2. Убирает markdown ```json``` обёртку
-    3. Ищет первый { ... } блок (если модель добавила пояснительный текст)
-    """
     text = text.strip()
 
     if "<think>" in text:
@@ -28,26 +20,31 @@ def _parse_json(text: str) -> dict:
 
     try:
         return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        # Явная диагностика: если JSON начинается с { но не закрыт —
+        # значит ответ обрезан из-за max_output_tokens.
+        if text.startswith("{") and not text.endswith("}"):
+            raise ValueError(
+                f"Gemini response truncated (max_output_tokens too low). "
+                f"Preview: {text[:300]}"
+            ) from e
 
     if "```" in text:
-        parts = text.split("```")
-        for part in parts:
-            part = part.strip()
-            if part.startswith("json"):
-                part = part[4:].strip()
+        for part in text.split("```"):
+            part = part.strip().lstrip("json").strip()
             try:
                 return json.loads(part)
             except json.JSONDecodeError:
                 continue
 
-    start = text.find("{")
-    end = text.rfind("}") + 1
+    start, end = text.find("{"), text.rfind("}") + 1
     if start != -1 and end > start:
-        return json.loads(text[start:end])
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
 
-    raise ValueError(f"Cannot parse JSON from Gemini response: {text[:200]}")
+    raise ValueError(f"Cannot parse JSON from Gemini response: {text[:300]}")
 
 
 async def send_text(system_prompt: str, user_message: str) -> dict:
@@ -57,7 +54,7 @@ async def send_text(system_prompt: str, user_message: str) -> dict:
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
             temperature=0.4,
-            max_output_tokens=1000,
+            max_output_tokens=2048,  # было 1000 — для tips/quests достаточно
             response_mime_type="application/json",
         ),
     )
@@ -76,7 +73,7 @@ async def analyze_image(
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
             temperature=0.2,
-            max_output_tokens=1000,
+            max_output_tokens=4096,  # было 1000 — обрезало JSON при длинных русских названиях
             response_mime_type="application/json",
         ),
     )
