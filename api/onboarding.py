@@ -1,14 +1,20 @@
+"""
+GET  /api/onboarding/progress  — текущий шаг + данные черновика
+POST /api/onboarding/step      — сохранить данные шага
+POST /api/onboarding/complete  — завершить онбординг → профиль + цели
+DELETE /api/onboarding/reset   — сбросить профиль/цели → заново на онбординг
+"""
+
+import logging
 from decimal import Decimal
 from typing import Optional
-import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from aiogram.utils.web_app import WebAppInitData
 
-from .utils import auth, get_or_create_user
+from .utils import get_current_user
 from .profile import _recalculate_goals
-from db import OnboardingDraft, UserProfile, DailyGoal, WeightHistory
+from db import User, OnboardingDraft, UserProfile, DailyGoal, WeightHistory
 from ai.services.goal_calculator import calculate_base_goals
 
 logger = logging.getLogger(__name__)
@@ -28,9 +34,6 @@ ACTIVITY_MULTIPLIERS = {
     "active": 1.725,
     "extreme": 1.9,
 }
-
-
-# ─── Fallback: Mifflin-St Jeor без AI ───────────────────────────────────────
 
 
 class StepDataIn(BaseModel):
@@ -67,12 +70,7 @@ def _draft_to_response(draft: OnboardingDraft) -> dict:
 
 
 @router.get("/progress")
-async def get_progress(auth_data: WebAppInitData = Depends(auth)):
-    user = await get_or_create_user(
-        auth_data.user.id,
-        auth_data.user.first_name or "Unknown",
-        auth_data.user.username,
-    )
+async def get_progress(user: User = Depends(get_current_user)):
     draft = await OnboardingDraft.get_or_none(user_id=user.telegram_id)
     if not draft:
         return {"step": 1, "data": {}}
@@ -80,12 +78,7 @@ async def get_progress(auth_data: WebAppInitData = Depends(auth)):
 
 
 @router.post("/step")
-async def save_step(body: StepDataIn, auth_data: WebAppInitData = Depends(auth)):
-    user = await get_or_create_user(
-        auth_data.user.id,
-        auth_data.user.first_name or "Unknown",
-        auth_data.user.username,
-    )
+async def save_step(body: StepDataIn, user: User = Depends(get_current_user)):
     draft, _ = await OnboardingDraft.get_or_create(user_id=user.telegram_id)
     update: dict = {"step": body.step}
 
@@ -119,12 +112,7 @@ async def save_step(body: StepDataIn, auth_data: WebAppInitData = Depends(auth))
 
 
 @router.post("/complete")
-async def complete_onboarding(auth_data: WebAppInitData = Depends(auth)):
-    user = await get_or_create_user(
-        auth_data.user.id,
-        auth_data.user.first_name or "Unknown",
-        auth_data.user.username,
-    )
+async def complete_onboarding(user: User = Depends(get_current_user)):
     draft = await OnboardingDraft.get_or_none(user_id=user.telegram_id)
     if not draft:
         raise HTTPException(status_code=400, detail="No onboarding draft found")
@@ -200,4 +188,17 @@ async def complete_onboarding(auth_data: WebAppInitData = Depends(auth)):
         if goal.calories == 0:  # если запись была пустой
             await DailyGoal.filter(user_id=user.telegram_id).update(**goals)
 
+    return {"ok": True}
+
+
+@router.delete("/reset")
+async def reset_onboarding(user: User = Depends(get_current_user)):
+    """
+    Сбрасывает профиль и цели пользователя.
+    После вызова GET /api/users/me вернёт needs_onboarding=True.
+    Используется для повторного прохождения онбординга.
+    """
+    await UserProfile.filter(user_id=user.telegram_id).delete()
+    await DailyGoal.filter(user_id=user.telegram_id).delete()
+    await OnboardingDraft.filter(user_id=user.telegram_id).delete()
     return {"ok": True}

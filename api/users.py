@@ -4,9 +4,8 @@ DELETE /api/users/me — полное удаление аккаунта (нео�
 """
 
 from fastapi import APIRouter, Depends
-from aiogram.utils.web_app import WebAppInitData
 
-from .utils import auth, get_or_create_user
+from .utils import get_current_user
 from db import (
     User,
     UserSchema,
@@ -23,15 +22,7 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 
 @router.get("/me")
-async def get_me(auth_data: WebAppInitData = Depends(auth)):
-    tg_user = auth_data.user
-    user = await get_or_create_user(
-        telegram_id=tg_user.id,
-        full_name=tg_user.first_name or "Unknown",
-        username=tg_user.username,
-        language_code=tg_user.language_code or "en",
-    )
-
+async def get_me(user: User = Depends(get_current_user)):
     # get_or_none надёжнее, чем user.profile — обратная связь в Tortoise
     # может вернуть None вместо DoesNotExist в зависимости от версии ORM.
     profile = await UserProfile.get_or_none(user_id=user.telegram_id)
@@ -66,7 +57,7 @@ async def get_me(auth_data: WebAppInitData = Depends(auth)):
 
 
 @router.delete("/me")
-async def delete_account(auth_data: WebAppInitData = Depends(auth)):
+async def delete_account(user: User = Depends(get_current_user)):
     """
     Полностью удаляет аккаунт пользователя.
 
@@ -81,10 +72,6 @@ async def delete_account(auth_data: WebAppInitData = Depends(auth)):
     После этого следующий GET /api/users/me пересоздаст User через
     get_or_create_user — пользователь снова попадёт на онбординг.
     """
-    user = await get_or_create_user(
-        auth_data.user.id, auth_data.user.first_name or "Unknown"
-    )
-
     photo_keys = await FoodLog.filter(
         user_id=user.telegram_id, photo_url__isnull=False
     ).values_list("photo_url", flat=True)

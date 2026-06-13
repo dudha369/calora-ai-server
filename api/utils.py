@@ -1,13 +1,32 @@
-from fastapi import Request, HTTPException
-from aiogram.utils.web_app import WebAppInitData, safe_parse_webapp_init_data
-from config import config
-from db import User
+"""
+Общие утилиты API: авторизация и работа с пользователем.
+
+get_current_user — единственная точка входа для эндпоинтов.
+Заменяет пару Depends(auth) + get_or_create_user() одним вызовом.
+"""
+
+import logging
 from typing import Optional
 
+from fastapi import Request, HTTPException, Depends
+from aiogram.utils.web_app import WebAppInitData, safe_parse_webapp_init_data
 
-def auth(request: Request) -> Optional[WebAppInitData]:
+from config import config
+from db import User
+
+logger = logging.getLogger(__name__)
+
+
+def auth(request: Request) -> WebAppInitData:
+    """
+    Парсит и валидирует Telegram initData из заголовка.
+    Возвращает WebAppInitData или бросает 401/403.
+    """
     if request.method == "OPTIONS":
-        return None
+        # CORS preflight обрабатывается CORSMiddleware до вызова зависимостей,
+        # но на случай прямого OPTIONS-запроса — явно отклоняем.
+        raise HTTPException(status_code=400, detail="OPTIONS not supported here")
+
     try:
         auth_string = request.headers.get("initData")
         if not auth_string:
@@ -48,9 +67,9 @@ async def get_or_create_user(
 
     if not created:
         needs_update = (
-                user.full_name != full_name
-                or (username is not None and user.username != username)
-                or (language_code and user.language_code != language_code)
+            user.full_name != full_name
+            or (username is not None and user.username != username)
+            or (language_code and user.language_code != language_code)
         )
         if needs_update:
             update = {"full_name": full_name}
@@ -62,3 +81,27 @@ async def get_or_create_user(
             await user.refresh_from_db()
 
     return user
+
+
+async def get_current_user(
+    auth_data: WebAppInitData = Depends(auth),
+) -> User:
+    """
+    Единая зависимость: auth + get_or_create_user в одном шаге.
+
+    Использование:
+        @router.get("/endpoint")
+        async def handler(user: User = Depends(get_current_user)):
+            ...
+
+    Заменяет бывший паттерн:
+        auth_data = Depends(auth)
+        user = await get_or_create_user(auth_data.user.id, ...)
+    """
+    tg = auth_data.user
+    return await get_or_create_user(
+        telegram_id=tg.id,
+        full_name=tg.first_name or "Unknown",
+        username=tg.username,
+        language_code=tg.language_code or "ru",
+    )

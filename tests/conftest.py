@@ -11,6 +11,7 @@ import os
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 from decimal import Decimal
+from datetime import date, datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -187,3 +188,33 @@ async def seeded_user(client: AsyncClient):
     )
 
     return user
+
+
+@pytest_asyncio.fixture
+async def seeded_user_with_food(seeded_user):
+    """
+    Seeded user + food log for today.
+    Returns the User model instance.
+    """
+    from db import FoodLog, FoodItem
+
+    food_log = await FoodLog.create(
+        user_id=seeded_user.telegram_id,
+        log_date=date.today(),
+        total_calories=500,
+        total_protein_g=Decimal("30.0"),
+        total_fat_g=Decimal("15.0"),
+        total_carbs_g=Decimal("50.0"),
+    )
+
+    await FoodItem.create(
+        food_log_id=food_log.id,
+        food_name="Тестовое блюдо",
+        portion_g=Decimal("300.0"),
+        calories=500,
+        protein_g=Decimal("30.0"),
+        fat_g=Decimal("15.0"),
+        carbs_g=Decimal("50.0"),
+    )
+
+    return seeded_user

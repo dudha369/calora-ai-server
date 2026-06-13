@@ -1,5 +1,7 @@
 """
 Backblaze B2 через S3-совместимый API (boto3).
+
+Клиент создаётся один раз (singleton) и переиспользуется.
 """
 
 import asyncio
@@ -18,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 PRESIGNED_URL_TTL = 60 * 60 * 24
 
+# ─── Singleton B2 client ─────────────────────────────────────────────────────
+
+_b2_client = None
+
 
 def _is_configured() -> bool:
     return bool(
@@ -28,36 +34,61 @@ def _is_configured() -> bool:
     )
 
 
-def _make_client():
-    return boto3.client(
-        service_name="s3",
-        endpoint_url=config.B2_ENDPOINT,
-        aws_access_key_id=config.B2_KEY_ID.get_secret_value(),
-        aws_secret_access_key=config.B2_APPLICATION_KEY.get_secret_value(),
-        config=BotoConfig(signature_version="s3v4"),
-    )
+def _get_client():
+    """Возвращает singleton boto3 S3 client. Создаёт при первом вызове."""
+    global _b2_client
+    if _b2_client is None:
+        _b2_client = boto3.client(
+            service_name="s3",
+            endpoint_url=config.B2_ENDPOINT,
+            aws_access_key_id=config.B2_KEY_ID.get_secret_value(),
+            aws_secret_access_key=config.B2_APPLICATION_KEY.get_secret_value(),
+            config=BotoConfig(signature_version="s3v4"),
+        )
+    return _b2_client
+
+
+# ─── Sync operations (run via asyncio.to_thread) ─────────────────────────────
 
 
 def _sync_upload(image_bytes: bytes, object_key: str, mime_type: str) -> None:
     """Синхронная загрузка — выполняется в потоке через asyncio.to_thread."""
-    client = _make_client()
+    client = _get_client()
     client.upload_fileobj(
         BytesIO(image_bytes),
         config.B2_BUCKET,
         object_key,
         ExtraArgs={"ContentType": mime_type},
-        # ACL не указываем — бакет приватный, файл тоже приватный
     )
 
 
 def _sync_presign(object_key: str) -> str:
     """Генерирует временную ссылку для приватного объекта."""
-    client = _make_client()
+    client = _get_client()
     return client.generate_presigned_url(
         "get_object",
         Params={"Bucket": config.B2_BUCKET, "Key": object_key},
         ExpiresIn=PRESIGNED_URL_TTL,
     )
+
+
+def _sync_delete(object_key: str) -> None:
+    client = _get_client()
+    client.delete_object(Bucket=config.B2_BUCKET, Key=object_key)
+
+
+def _sync_delete_many(object_keys: list[str]) -> None:
+    """S3 delete_objects — до 1000 ключей за один запрос."""
+    client = _get_client()
+    for i in range(0, len(object_keys), 1000):
+        batch = object_keys[i : i + 1000]
+        client.delete_objects(
+            Bucket=config.B2_BUCKET,
+            Delete={"Objects": [{"Key": k} for k in batch], "Quiet": True},
+        )
+
+
+# ─── Async API ────────────────────────────────────────────────────────────────
 
 
 async def upload_food_photo(
@@ -99,22 +130,6 @@ async def get_photo_url(object_key: Optional[str]) -> Optional[str]:
     except (BotoCoreError, ClientError) as e:
         logger.error(f"B2 presign failed for key {object_key}: {e}")
         return None
-
-
-def _sync_delete(object_key: str) -> None:
-    client = _make_client()
-    client.delete_object(Bucket=config.B2_BUCKET, Key=object_key)
-
-
-def _sync_delete_many(object_keys: list[str]) -> None:
-    """S3 delete_objects — до 1000 ключей за один запрос."""
-    client = _make_client()
-    for i in range(0, len(object_keys), 1000):
-        batch = object_keys[i : i + 1000]
-        client.delete_objects(
-            Bucket=config.B2_BUCKET,
-            Delete={"Objects": [{"Key": k} for k in batch], "Quiet": True},
-        )
 
 
 async def delete_food_photo(object_key: Optional[str]) -> None:

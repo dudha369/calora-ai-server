@@ -1,4 +1,6 @@
 import asyncio
+import logging
+
 from aiogram import Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
@@ -8,6 +10,7 @@ from config import config
 from bot_instance import bot
 from db import User
 
+logger = logging.getLogger(__name__)
 router = Router(name="common")
 
 
@@ -54,7 +57,7 @@ async def _save_user(message: Message) -> bool:
         )
         return created
     except Exception as e:
-        print("DB ERROR:", e)
+        logger.error("DB error saving user %s: %s", user.id, e, exc_info=True)
         return False
 
 
@@ -83,4 +86,4 @@ async def _notify_admin(
             parse_mode="Markdown",
         )
     except Exception as e:
-        print("ADMIN NOTIFY ERROR:", e)
+        logger.error("Admin notify error for user %s: %s", user_id, e, exc_info=True)

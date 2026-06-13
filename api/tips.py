@@ -1,28 +1,27 @@
 """
 GET /api/tips/today — совет за сегодня (создаёт если нет)
-GET /api/tips       — последние 7 советов
+GET /api/tips       — последние N советов (пагинация: ?limit=7&offset=0)
 """
 
+import logging
 from datetime import date
-from fastapi import APIRouter, Depends
-from aiogram.utils.web_app import WebAppInitData
 
-from .utils import auth, get_or_create_user
-from db import AiTip, AiTipSchema, FoodLog, DailyGoal
+from fastapi import APIRouter, Depends, Query
+
+from .utils import get_current_user
+from db import User, AiTip, AiTipSchema, FoodLog, DailyGoal
 from ai.services.tip_generator import generate_daily_tip
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tips", tags=["tips"])
 
 
 @router.get("/today")
-async def get_today_tip(auth_data: WebAppInitData = Depends(auth)):
+async def get_today_tip(user: User = Depends(get_current_user)):
     """
     Возвращает совет за сегодня.
     Если нет — генерирует на основе еды за сегодня (если есть хоть одна запись).
     """
-    user = await get_or_create_user(
-        auth_data.user.id, auth_data.user.first_name or "Unknown"
-    )
     today = date.today()
 
     existing = await AiTip.get_or_none(user_id=user.telegram_id, based_on_date=today)
@@ -63,7 +62,8 @@ async def get_today_tip(auth_data: WebAppInitData = Depends(auth)):
             based_on_date=today,
         )
         return (await AiTipSchema.from_tortoise_orm(tip)).model_dump()
-    except Exception:
+    except Exception as e:
+        logger.error(f"Tip generation failed for user {user.telegram_id}: {e}")
         return {
             "tip": None,
             "message": "Не удалось сгенерировать совет, попробуй позже",
@@ -71,10 +71,16 @@ async def get_today_tip(auth_data: WebAppInitData = Depends(auth)):
 
 
 @router.get("")
-async def get_recent_tips(auth_data: WebAppInitData = Depends(auth)):
-    """Последние 7 советов."""
-    user = await get_or_create_user(
-        auth_data.user.id, auth_data.user.first_name or "Unknown"
+async def get_recent_tips(
+    limit: int = Query(7, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    user: User = Depends(get_current_user),
+):
+    """Последние советы с пагинацией."""
+    tips = (
+        await AiTip.filter(user_id=user.telegram_id)
+        .offset(offset)
+        .limit(limit)
+        .all()
     )
-    tips = await AiTip.filter(user_id=user.telegram_id).limit(7).all()
     return [(await AiTipSchema.from_tortoise_orm(t)).model_dump() for t in tips]

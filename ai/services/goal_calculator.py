@@ -2,7 +2,11 @@
 Расчёт дневных целей: формула на сервере + персонализация через Gemini.
 """
 
+import logging
+
 from ai.gemini import send_text
+
+logger = logging.getLogger(__name__)
 
 ACTIVITY_MULTIPLIERS = {
     "sedentary": 1.2,
@@ -83,8 +87,8 @@ async def calculate_and_personalize(profile_data: dict) -> dict:
         result = await send_text(GOALS_PROMPT, user_msg)
         goals = result.get("adjusted_goals", base)
         ai_tip = result.get("tip_of_day")
-    except Exception as _ex:
-        print(_ex)
+    except Exception as e:
+        logger.warning("Gemini personalization failed, using base goals: %s", e)
         # Если Gemini недоступен — используем базовые цели без персонализации
         goals = base
         ai_tip = None

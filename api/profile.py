@@ -6,17 +6,18 @@ PUT  /api/profile — обновить профиль
 _recalculate_goals — внутренняя функция, импортируется также из api/onboarding.py.
 """
 
+import logging
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from aiogram.utils.web_app import WebAppInitData
 
-from .utils import auth, get_or_create_user
-from db import UserProfile, UserProfileSchema, DailyGoal, WeightHistory
+from .utils import get_current_user
+from db import User, UserProfile, UserProfileSchema, DailyGoal, WeightHistory
 from ai.services.goal_calculator import calculate_and_personalize
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 
@@ -63,12 +64,8 @@ async def _recalculate_goals(user_id: int, profile: UserProfile) -> DailyGoal:
 
 
 @router.post("")
-async def create_profile(body: ProfileIn, auth_data: WebAppInitData = Depends(auth)):
+async def create_profile(body: ProfileIn, user: User = Depends(get_current_user)):
     """Создаёт профиль напрямую (минуя онбординг). Если уже есть — 400."""
-    user = await get_or_create_user(
-        auth_data.user.id, auth_data.user.first_name or "Unknown"
-    )
-
     if await UserProfile.get_or_none(user_id=user.telegram_id):
         raise HTTPException(status_code=400, detail="Profile already exists. Use PUT.")
 
@@ -107,11 +104,8 @@ async def create_profile(body: ProfileIn, auth_data: WebAppInitData = Depends(au
 
 
 @router.put("")
-async def update_profile(body: ProfileIn, auth_data: WebAppInitData = Depends(auth)):
+async def update_profile(body: ProfileIn, user: User = Depends(get_current_user)):
     """Обновляет профиль и пересчитывает DailyGoal."""
-    user = await get_or_create_user(
-        auth_data.user.id, auth_data.user.first_name or "Unknown"
-    )
     profile = await UserProfile.get_or_none(user_id=user.telegram_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found. Use POST.")

@@ -10,11 +10,10 @@ GET /api/stats/active-dates?from=YYYY-MM-DD&to=YYYY-MM-DD
 
 from datetime import date as date_type
 from fastapi import APIRouter, Depends, Query
-from aiogram.utils.web_app import WebAppInitData
 from tortoise.exceptions import DoesNotExist
 
-from .utils import auth, get_or_create_user
-from db import FoodLog, WaterLog, DailyGoal
+from .utils import get_current_user
+from db import User, FoodLog, WaterLog, DailyGoal
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -22,11 +21,8 @@ router = APIRouter(prefix="/api/stats", tags=["stats"])
 @router.get("/daily")
 async def get_daily_stats(
     date: str,
-    auth_data: WebAppInitData = Depends(auth),
+    user: User = Depends(get_current_user),
 ):
-    user = await get_or_create_user(
-        auth_data.user.id, auth_data.user.first_name or "Unknown"
-    )
     d = date_type.fromisoformat(date)
 
     # — Суммируем FoodLog за день —
@@ -78,11 +74,8 @@ async def get_daily_stats(
 async def get_active_dates(
     from_: str = Query(..., alias="from"),  # "from" — keyword в Python
     to: str = Query(...),
-    auth_data: WebAppInitData = Depends(auth),
+    user: User = Depends(get_current_user),
 ):
-    user = await get_or_create_user(
-        auth_data.user.id, auth_data.user.first_name or "Unknown"
-    )
     d_from = date_type.fromisoformat(from_)
     d_to = date_type.fromisoformat(to)
 
