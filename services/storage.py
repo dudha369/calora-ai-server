@@ -2,6 +2,12 @@
 Backblaze B2 через S3-совместимый API (boto3).
 
 Клиент создаётся один раз (singleton) и переиспользуется.
+
+Важно: B2 по умолчанию хранит все версии файлов. Обычный delete_object
+без VersionId создаёт «hide marker» (0 bytes, помечен hidden) вместо
+физического удаления. Для настоящего удаления нужно:
+  1. list_object_versions → получить все VersionId (включая маркеры)
+  2. delete_objects с явными VersionId
 """
 
 import asyncio
@@ -18,7 +24,7 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
-PRESIGNED_URL_TTL = 60 * 60 * 24
+PRESIGNED_URL_TTL = 60 * 60 * 24  # 24 часа
 
 # ─── Singleton B2 client ─────────────────────────────────────────────────────
 
@@ -48,6 +54,41 @@ def _get_client():
     return _b2_client
 
 
+# ─── Version-aware helper ────────────────────────────────────────────────────
+
+
+def _collect_all_versions(client, object_key: str) -> list[dict]:
+    """
+    Возвращает список всех версий и delete-маркеров для данного ключа.
+
+    B2 с «Keep all versions» хранит историю:
+    - Versions      — реальные версии файла
+    - DeleteMarkers — 0-byte маркеры, созданные delete_object без VersionId
+
+    Фильтруем по ТОЧНОМУ совпадению ключа: Prefix — это prefix-match,
+    поэтому "food/1/abc.jpg" мог бы захватить "food/1/abc.jpg.bak".
+
+    Возвращает [] если версионирование не поддерживается или файл не существует.
+    Caller должен сделать fallback на простой delete_object.
+    """
+    try:
+        response = client.list_object_versions(
+            Bucket=config.B2_BUCKET,
+            Prefix=object_key,
+        )
+        all_entries = response.get("Versions", []) + response.get("DeleteMarkers", [])
+        return [
+            {"Key": v["Key"], "VersionId": v["VersionId"]}
+            for v in all_entries
+            if v["Key"] == object_key and v.get("VersionId")
+        ]
+    except (BotoCoreError, ClientError) as e:
+        # NotImplemented = бакет без версионирования → возвращаем [] → caller
+        # использует простой delete_object. Остальные ошибки — тоже fallback.
+        logger.debug("list_object_versions unavailable for %s: %s", object_key, e)
+        return []
+
+
 # ─── Sync operations (run via asyncio.to_thread) ─────────────────────────────
 
 
@@ -73,22 +114,60 @@ def _sync_presign(object_key: str) -> str:
 
 
 def _sync_delete(object_key: str) -> None:
+    """
+    Permanently deletes an object — все версии и hide-маркеры.
+
+    Проблема с обычным delete_object:
+      B2 при delete_object без VersionId создаёт hide-marker (0-byte файл
+      с пометкой «hidden»). Реальный файл остаётся, занимает место, виден
+      в консоли как «filename.jpg (hidden)». Именно это было на скриншоте.
+
+    Решение:
+      1. list_object_versions → все VersionId (файлы + маркеры)
+      2. delete_objects с явными VersionId → физическое удаление
+      3. Если версий нет → fallback delete_object (не-версионированный бакет)
+    """
     client = _get_client()
-    client.delete_object(Bucket=config.B2_BUCKET, Key=object_key)
+    versions = _collect_all_versions(client, object_key)
+
+    if versions:
+        client.delete_objects(
+            Bucket=config.B2_BUCKET,
+            Delete={"Objects": versions, "Quiet": True},
+        )
+    else:
+        # Fallback: не-версионированный бакет или файл не существует.
+        # delete_object на несуществующий ключ в S3/B2 возвращает 204 — безопасно.
+        client.delete_object(Bucket=config.B2_BUCKET, Key=object_key)
 
 
 def _sync_delete_many(object_keys: list[str]) -> None:
-    """S3 delete_objects — до 1000 ключей за один запрос."""
+    """
+    Batch permanent deletion — все версии для каждого ключа.
+
+    Стратегия: собрать все VersionId для всех ключей, затем удалить одним
+    batch'ем (или несколькими, если > 1000). Ключи без версий добавляются
+    без VersionId — корректно для не-версионированных бакетов.
+    """
     client = _get_client()
-    for i in range(0, len(object_keys), 1000):
-        batch = object_keys[i : i + 1000]
+    to_delete: list[dict] = []
+
+    for key in object_keys:
+        versions = _collect_all_versions(client, key)
+        if versions:
+            to_delete.extend(versions)
+        else:
+            to_delete.append({"Key": key})
+
+    # S3/B2: max 1000 объектов за один delete_objects запрос
+    for i in range(0, len(to_delete), 1000):
         client.delete_objects(
             Bucket=config.B2_BUCKET,
-            Delete={"Objects": [{"Key": k} for k in batch], "Quiet": True},
+            Delete={"Objects": to_delete[i : i + 1000], "Quiet": True},
         )
 
 
-# ─── Async API ────────────────────────────────────────────────────────────────
+# ─── Async public API ─────────────────────────────────────────────────────────
 
 
 async def upload_food_photo(
@@ -112,15 +191,13 @@ async def upload_food_photo(
         await asyncio.to_thread(_sync_upload, image_bytes, object_key, mime_type)
         return object_key
     except (BotoCoreError, ClientError) as e:
-        logger.error(f"B2 upload failed for user {user_id}: {e}")
+        logger.error("B2 upload failed for user %s: %s", user_id, e)
         return None
 
 
 async def get_photo_url(object_key: Optional[str]) -> Optional[str]:
     """
     По ключу из БД генерирует presigned URL действительный 24 часа.
-    Используй в src тега <img> — работает как обычная ссылка.
-
     Если ключ None или B2 не настроен — возвращает None.
     """
     if not object_key or not _is_configured():
@@ -128,26 +205,26 @@ async def get_photo_url(object_key: Optional[str]) -> Optional[str]:
     try:
         return await asyncio.to_thread(_sync_presign, object_key)
     except (BotoCoreError, ClientError) as e:
-        logger.error(f"B2 presign failed for key {object_key}: {e}")
+        logger.error("B2 presign failed for key %s: %s", object_key, e)
         return None
 
 
 async def delete_food_photo(object_key: Optional[str]) -> None:
-    """Удаляет одно фото (например, если еда на нём не распознана)."""
+    """Удаляет одно фото — все версии и hide-маркеры."""
     if not object_key or not _is_configured():
         return
     try:
         await asyncio.to_thread(_sync_delete, object_key)
     except (BotoCoreError, ClientError) as e:
-        logger.error(f"B2 delete failed for key {object_key}: {e}")
+        logger.error("B2 delete failed for key %s: %s", object_key, e)
 
 
 async def delete_food_photos(object_keys: list[str]) -> None:
-    """Батч-удаление фото пользователя (используется при удалении аккаунта)."""
+    """Батч-удаление всех фото пользователя (при удалении аккаунта)."""
     keys = [k for k in object_keys if k]
     if not keys or not _is_configured():
         return
     try:
         await asyncio.to_thread(_sync_delete_many, keys)
     except (BotoCoreError, ClientError) as e:
-        logger.error(f"B2 batch delete failed ({len(keys)} keys): {e}")
+        logger.error("B2 batch delete failed (%s keys): %s", len(keys), e)

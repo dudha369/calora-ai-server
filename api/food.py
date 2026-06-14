@@ -49,12 +49,12 @@ class FoodItemIn(BaseModel):
 class FoodLogIn(BaseModel):
     log_date: str
     items: list[FoodItemIn]
-    photo_key: Optional[str] = None   # ключ объекта в B2, не URL
+    photo_key: Optional[str] = None  # ключ объекта в B2, не URL
 
 
 class BarcodeLogIn(BaseModel):
     log_date: str
-    items: list[FoodItemIn]   # одна позиция, посчитанная на фронте из OFF-данных
+    items: list[FoodItemIn]  # одна позиция, посчитанная на фронте из OFF-данных
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -119,8 +119,7 @@ async def create_log_from_barcode(
 ):
     """
     Логирование еды по штрихкоду (OpenFoodFacts).
-    В отличие от /log, photo_url всегда NULL — фото со сканера
-    штрихкода не несёт пищевой информации и не сохраняется в B2.
+    photo_url всегда NULL — фото штрихкода не несёт пищевой информации.
     """
     return await _create_log_with_items(user, body.log_date, body.items, photo_key=None)
 
@@ -150,14 +149,41 @@ async def analyze_photo(
             detail=f"File too large. Max size: {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB",
         )
 
-    result, photo_key = await asyncio.gather(
+    # ── Параллельный upload + анализ с правильной обработкой ошибок ──
+    #
+    # Проблема с обычным asyncio.gather без return_exceptions:
+    #   Если analyze_food_photo упадёт — gather немедленно поднимает исключение,
+    #   photo_key недоступен (gather не возвращает частичные результаты),
+    #   фото остаётся в B2 навсегда — orphan.
+    #
+    # return_exceptions=True возвращает исключения как значения, что позволяет
+    # нам получить photo_key даже при ошибке анализа и сразу его удалить.
+    results = await asyncio.gather(
         analyze_food_photo(image_bytes, mime_type),
         upload_food_photo(image_bytes, user.telegram_id, mime_type),
+        return_exceptions=True,
     )
+    result, photo_key = results
 
+    # ── Обработка ошибки загрузки ──
+    # Upload — вспомогательная операция. Если B2 недоступен, продолжаем
+    # анализ без фото (photo_key = None). Лог создастся без превью.
+    if isinstance(photo_key, Exception):
+        logger.error("B2 upload failed for user %s: %s", user.telegram_id, photo_key)
+        photo_key = None
+
+    # ── Обработка ошибки анализа ──
+    # Gemini упал → удаляем уже загруженное фото, чтобы не копить мусор в B2.
+    if isinstance(result, Exception):
+        logger.error("Food analysis failed for user %s: %s", user.telegram_id, result)
+        if photo_key:
+            await delete_food_photo(photo_key)
+        raise HTTPException(status_code=500, detail="Failed to analyze the photo. Please try again.")
+
+    # ── Gemini вернул ошибку (нет еды на фото и т.п.) ──
     if "error" in result:
-        # Еда не распознана — фото бесполезно, не оставляем мусор в B2
-        await delete_food_photo(photo_key)
+        if photo_key:
+            await delete_food_photo(photo_key)
         raise HTTPException(status_code=422, detail=result["error"])
 
     return {**result, "photo_key": photo_key}
@@ -177,7 +203,6 @@ async def get_logs_by_date(log_date: str, user: User = Depends(get_current_user)
         user_id=user.telegram_id, log_date=d
     ).prefetch_related("items")
 
-    # Генерируем presigned URL для всех фото параллельно
     photo_urls = await asyncio.gather(
         *[get_photo_url(log.photo_url) for log in logs]
     )
@@ -190,7 +215,7 @@ async def get_logs_by_date(log_date: str, user: User = Depends(get_current_user)
         )
         result.append({
             **log_dict,
-            "photo_url": photo_url,   # presigned URL или None
+            "photo_url": photo_url,
             "items": [i.model_dump() for i in items],
         })
 
@@ -198,10 +223,10 @@ async def get_logs_by_date(log_date: str, user: User = Depends(get_current_user)
         "date": log_date,
         "logs": result,
         "daily_total": {
-            "calories":   sum(l["total_calories"]       for l in result),
-            "protein_g":  sum(float(l["total_protein_g"]) for l in result),
-            "fat_g":      sum(float(l["total_fat_g"])     for l in result),
-            "carbs_g":    sum(float(l["total_carbs_g"])   for l in result),
+            "calories":  sum(l["total_calories"] for l in result),
+            "protein_g": sum(float(l["total_protein_g"]) for l in result),
+            "fat_g":     sum(float(l["total_fat_g"]) for l in result),
+            "carbs_g":   sum(float(l["total_carbs_g"]) for l in result),
         },
     }
 
@@ -211,22 +236,22 @@ async def delete_orphan_photo(photo_key: str, user: User = Depends(get_current_u
     """
     Удаляет фото из B2, которое не было привязано к FoodLog.
 
-    Вызывается клиентом когда пользователь отменяет модальное окно
-    подтверждения после /analyze — фото уже загружено в B2, но
-    пользователь не подтвердил блюдо, поэтому photo_key не попал в БД.
+    Вызывается клиентом когда пользователь закрывает модалку подтверждения
+    после /analyze не нажав «Добавить» — фото уже в B2, но photo_key
+    не попал в БД.
 
-    Безопасность: проверяем что photo_key начинается с food/{user_id}/
+    Безопасность:
+    - Валидация формата ключа через regex
+    - Проверка принадлежности фото текущему пользователю
+    - Проверка что фото не используется ни одним FoodLog
     """
-    # Валидация формата ключа
     if not _PHOTO_KEY_RE.match(photo_key):
         raise HTTPException(status_code=400, detail="Invalid photo key format")
 
-    # Проверяем что фото принадлежит текущему пользователю
     expected_prefix = f"food/{user.telegram_id}/"
     if not photo_key.startswith(expected_prefix):
         raise HTTPException(status_code=403, detail="Cannot delete another user's photo")
 
-    # Проверяем что фото не используется ни одним FoodLog
     existing = await FoodLog.filter(
         user_id=user.telegram_id, photo_url=photo_key
     ).exists()
@@ -242,12 +267,10 @@ async def delete_orphan_photo(photo_key: str, user: User = Depends(get_current_u
 
 @router.delete("/{log_id}")
 async def delete_log(log_id: int, user: User = Depends(get_current_user)):
-    # Получаем запись перед удалением, чтобы почистить фото из B2
     food_log = await FoodLog.get_or_none(id=log_id, user_id=user.telegram_id)
     if not food_log:
         raise HTTPException(status_code=404, detail="Log not found")
 
-    # Удаляем фото из B2 (если есть)
     if food_log.photo_url:
         await delete_food_photo(food_log.photo_url)
 
