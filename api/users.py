@@ -18,6 +18,8 @@ from db import (
 )
 from services.storage import delete_food_photos
 
+from config import config
+
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
@@ -58,26 +60,23 @@ async def get_me(user: User = Depends(get_current_user)):
 
 @router.delete("/me")
 async def delete_account(user: User = Depends(get_current_user)):
-    """
-    Полностью удаляет аккаунт пользователя.
+    is_admin = (
+        config.ADMIN_TELEGRAM_ID
+        and user.telegram_id == config.ADMIN_TELEGRAM_ID
+    )
 
-    1. Собирает ключи всех фото еды из FoodLog.photo_url и удаляет их из B2 —
-       внешнее хранилище не входит в транзакцию БД, поэтому чистим его первым,
-       пока ключи ещё доступны.
-    2. Удаляет строку User. ON DELETE CASCADE на всех связанных таблицах
-       (user_profiles, daily_goals, weight_history, food_logs → food_items,
-       water_logs, quests, ai_tips, onboarding_drafts) каскадно удаляет
-       абсолютно все данные пользователя одной транзакцией.
+    if is_admin:
+        await UserProfile.filter(user_id=user.telegram_id).delete()
+        await DailyGoal.filter(user_id=user.telegram_id).delete()
+        await OnboardingDraft.filter(user_id=user.telegram_id).delete()
 
-    После этого следующий GET /api/users/me пересоздаст User через
-    get_or_create_user — пользователь снова попадёт на онбординг.
-    """
+        return {"ok": True}
+
     photo_keys = await FoodLog.filter(
         user_id=user.telegram_id, photo_url__isnull=False
     ).values_list("photo_url", flat=True)
 
     await delete_food_photos(list(photo_keys))
-
     await User.filter(telegram_id=user.telegram_id).delete()
 
     return {"ok": True}

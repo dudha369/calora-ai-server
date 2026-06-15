@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from .utils import auth, get_current_user, check_rate_limit, parse_date
 from db import User, FoodLog, FoodLogSchema, FoodItem, FoodItemSchema
+from ai.gemini import GeminiUnavailableError
 from ai.services.food_analyzer import analyze_food_photo
 from services.storage import upload_food_photo, get_photo_url, delete_food_photo
 
@@ -149,41 +150,25 @@ async def analyze_photo(
             detail=f"File too large. Max size: {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB",
         )
 
-    # ── Параллельный upload + анализ с правильной обработкой ошибок ──
-    #
-    # Проблема с обычным asyncio.gather без return_exceptions:
-    #   Если analyze_food_photo упадёт — gather немедленно поднимает исключение,
-    #   photo_key недоступен (gather не возвращает частичные результаты),
-    #   фото остаётся в B2 навсегда — orphan.
-    #
-    # return_exceptions=True возвращает исключения как значения, что позволяет
-    # нам получить photo_key даже при ошибке анализа и сразу его удалить.
-    results = await asyncio.gather(
-        analyze_food_photo(image_bytes, mime_type),
-        upload_food_photo(image_bytes, user.telegram_id, mime_type),
-        return_exceptions=True,
-    )
-    result, photo_key = results
+    # Загружаем фото параллельно с анализом — экономим ~300-500ms
+    try:
+        result, photo_key = await asyncio.gather(
+            analyze_food_photo(image_bytes, mime_type),
+            upload_food_photo(image_bytes, user.telegram_id, mime_type),
+        )
+    except GeminiUnavailableError as exc:
+        # 503 от Gemini после всех retry — сообщаем клиенту корректно
+        logger.warning("Gemini unavailable for user %s: %s", user.telegram_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="AI model is temporarily overloaded. Please try again in a moment.",
+        )
+    except Exception as exc:
+        logger.error("Food analysis failed for user %s: %s", user.telegram_id, exc)
+        raise HTTPException(status_code=500, detail="Food analysis failed.")
 
-    # ── Обработка ошибки загрузки ──
-    # Upload — вспомогательная операция. Если B2 недоступен, продолжаем
-    # анализ без фото (photo_key = None). Лог создастся без превью.
-    if isinstance(photo_key, Exception):
-        logger.error("B2 upload failed for user %s: %s", user.telegram_id, photo_key)
-        photo_key = None
-
-    # ── Обработка ошибки анализа ──
-    # Gemini упал → удаляем уже загруженное фото, чтобы не копить мусор в B2.
-    if isinstance(result, Exception):
-        logger.error("Food analysis failed for user %s: %s", user.telegram_id, result)
-        if photo_key:
-            await delete_food_photo(photo_key)
-        raise HTTPException(status_code=500, detail="Failed to analyze the photo. Please try again.")
-
-    # ── Gemini вернул ошибку (нет еды на фото и т.п.) ──
     if "error" in result:
-        if photo_key:
-            await delete_food_photo(photo_key)
+        await delete_food_photo(photo_key)
         raise HTTPException(status_code=422, detail=result["error"])
 
     return {**result, "photo_key": photo_key}
