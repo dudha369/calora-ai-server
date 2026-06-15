@@ -157,11 +157,11 @@ async def seeded_user(client: AsyncClient):
         language_code="en",
     )
 
-    # Create profile
+    # Create profile (birth_date = 2001-06-12 → ~25 years old)
     await UserProfile.create(
         user_id=user.telegram_id,
         gender="male",
-        age=25,
+        birth_date=date(2001, 6, 12),
         height_cm=180,
         weight_kg=Decimal("80.0"),
         goal_type="lose",
@@ -185,6 +185,7 @@ async def seeded_user(client: AsyncClient):
     await WeightHistory.create(
         user_id=user.telegram_id,
         weight_kg=Decimal("80.0"),
+        log_date=date.today(),
     )
 
     return user
@@ -205,6 +206,8 @@ async def seeded_user_with_food(seeded_user):
         total_protein_g=Decimal("30.0"),
         total_fat_g=Decimal("15.0"),
         total_carbs_g=Decimal("50.0"),
+        total_fiber_g=Decimal("5.0"),
+        total_sugar_g=Decimal("8.0"),
     )
 
     await FoodItem.create(
@@ -215,6 +218,8 @@ async def seeded_user_with_food(seeded_user):
         protein_g=Decimal("30.0"),
         fat_g=Decimal("15.0"),
         carbs_g=Decimal("50.0"),
+        fiber_g=Decimal("5.0"),
+        sugar_g=Decimal("8.0"),
     )
 
     return seeded_user

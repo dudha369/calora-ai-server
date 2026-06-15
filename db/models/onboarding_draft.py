@@ -12,6 +12,9 @@ class OnboardingDraft(Model):
 
     height/weight всегда хранятся в метрике (cm/kg),
     *_unit — предпочтения отображения для фронтенда.
+
+    birth_date — дата рождения (YYYY-MM-DD), возраст вычисляется динамически.
+    timezone — IANA timezone, определяется клиентом автоматически.
     """
 
     user = fields.OneToOneField(
@@ -23,7 +26,7 @@ class OnboardingDraft(Model):
     # Шаг 1
     gender = fields.CharField(max_length=6, null=True)
     # Шаг 2
-    age = fields.SmallIntField(null=True)
+    birth_date = fields.DateField(null=True)
     # Шаг 3
     height_cm = fields.SmallIntField(null=True)
     # Шаг 4
@@ -42,6 +45,9 @@ class OnboardingDraft(Model):
     water_goal_ml = fields.SmallIntField(null=True)
     # Шаг 10
     medical_conditions = fields.JSONField(default=list)
+
+    # Авто-определяется клиентом
+    timezone = fields.CharField(max_length=40, null=True)
 
     class Meta:
         table = "onboarding_drafts"

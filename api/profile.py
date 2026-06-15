@@ -7,13 +7,14 @@ _recalculate_goals — внутренняя функция, импортируе
 """
 
 import logging
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .utils import get_current_user
+from .utils import get_current_user, parse_date
 from db import User, UserProfile, UserProfileSchema, DailyGoal, WeightHistory
 from ai.services.goal_calculator import calculate_and_personalize
 
@@ -23,7 +24,7 @@ router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 class ProfileIn(BaseModel):
     gender: str
-    age: int
+    birth_date: str  # "YYYY-MM-DD"
     height_cm: int
     weight_kg: float
     goal_type: str
@@ -34,13 +35,15 @@ class ProfileIn(BaseModel):
     dietary_restrictions: list[str] = []
     allergy_note: Optional[str] = None
     medical_conditions: list[str] = []
+    timezone: str = "Europe/Kyiv"
+    units_preference: str = "metric"  # 'metric' | 'imperial'
 
 
 async def _recalculate_goals(user_id: int, profile: UserProfile) -> DailyGoal:
     """Пересчитывает DailyGoal по данным профиля (формула + Gemini)."""
     profile_data = {
         "gender": profile.gender,
-        "age": profile.age,
+        "birth_date": profile.birth_date,
         "height_cm": profile.height_cm,
         "weight_kg": float(profile.weight_kg),
         "goal_type": profile.goal_type,
@@ -69,10 +72,12 @@ async def create_profile(body: ProfileIn, user: User = Depends(get_current_user)
     if await UserProfile.get_or_none(user_id=user.telegram_id):
         raise HTTPException(status_code=400, detail="Profile already exists. Use PUT.")
 
+    birth_date = parse_date(body.birth_date)
+
     profile = await UserProfile.create(
         user_id=user.telegram_id,
         gender=body.gender,
-        age=body.age,
+        birth_date=birth_date,
         height_cm=body.height_cm,
         weight_kg=Decimal(str(body.weight_kg)),
         goal_type=body.goal_type,
@@ -85,9 +90,15 @@ async def create_profile(body: ProfileIn, user: User = Depends(get_current_user)
         dietary_restrictions=body.dietary_restrictions,
         allergy_note=body.allergy_note,
         medical_conditions=body.medical_conditions,
+        timezone=body.timezone,
+        units_preference=body.units_preference,
     )
 
-    await WeightHistory.create(user_id=user.telegram_id, weight_kg=profile.weight_kg)
+    await WeightHistory.create(
+        user_id=user.telegram_id,
+        weight_kg=profile.weight_kg,
+        log_date=date.today(),
+    )
     goal = await _recalculate_goals(user.telegram_id, profile)
 
     return {
@@ -110,12 +121,13 @@ async def update_profile(body: ProfileIn, user: User = Depends(get_current_user)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found. Use POST.")
 
+    birth_date = parse_date(body.birth_date)
     old_weight = profile.weight_kg
     new_weight = Decimal(str(body.weight_kg))
 
     await UserProfile.filter(user_id=user.telegram_id).update(
         gender=body.gender,
-        age=body.age,
+        birth_date=birth_date,
         height_cm=body.height_cm,
         weight_kg=new_weight,
         goal_type=body.goal_type,
@@ -128,11 +140,17 @@ async def update_profile(body: ProfileIn, user: User = Depends(get_current_user)
         dietary_restrictions=body.dietary_restrictions,
         allergy_note=body.allergy_note,
         medical_conditions=body.medical_conditions,
+        timezone=body.timezone,
+        units_preference=body.units_preference,
     )
     await profile.refresh_from_db()
 
     if old_weight != new_weight:
-        await WeightHistory.create(user_id=user.telegram_id, weight_kg=new_weight)
+        await WeightHistory.create(
+            user_id=user.telegram_id,
+            weight_kg=new_weight,
+            log_date=date.today(),
+        )
 
     goal = await _recalculate_goals(user.telegram_id, profile)
 

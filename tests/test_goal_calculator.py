@@ -1,7 +1,18 @@
 """Tests for the Mifflin–St Jeor goal calculator (pure math, no AI)."""
 
 import pytest
-from ai.services.goal_calculator import calculate_base_goals
+from datetime import date
+from ai.services.goal_calculator import calculate_base_goals, calculate_age
+
+
+def test_calculate_age_basic():
+    """Age calculation from birth_date."""
+    # Someone born on June 12, 2001 — on June 15, 2026 they're 25
+    assert calculate_age(date(2001, 6, 12), today=date(2026, 6, 15)) == 25
+    # Before birthday in 2026 they'd still be 24
+    assert calculate_age(date(2001, 6, 12), today=date(2026, 6, 11)) == 24
+    # On exact birthday
+    assert calculate_age(date(2001, 6, 12), today=date(2026, 6, 12)) == 25
 
 
 def test_male_lose():
@@ -27,6 +38,27 @@ def test_male_lose():
     #         = round((2298 - 576 - 689.4) / 4, 1)
     #         = round(1032.6 / 4, 1) = round(258.15, 1) = 258.2
     assert result["carbs_g"] == 258.1
+
+
+def test_male_lose_with_birth_date():
+    """Same as test_male_lose but using birth_date instead of age."""
+    # birth_date that gives age=25 on today's date equivalent
+    from unittest.mock import patch
+
+    # Fix "today" to a known date so age=25
+    with patch("ai.services.goal_calculator.date") as mock_date:
+        mock_date.today.return_value = date(2026, 6, 15)
+        mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+        result = calculate_base_goals({
+            "gender": "male",
+            "birth_date": date(2001, 6, 12),
+            "height_cm": 180,
+            "weight_kg": 80.0,
+            "goal_type": "lose",
+            "activity_level": "moderate",
+        })
+    assert result["calories"] == 2298
+    assert result["protein_g"] == 144.0
 
 
 def test_female_maintain():

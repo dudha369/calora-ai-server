@@ -45,6 +45,8 @@ class FoodItemIn(BaseModel):
     protein_g: float
     fat_g: float
     carbs_g: float
+    fiber_g: float = 0.0
+    sugar_g: float = 0.0
 
 
 class FoodLogIn(BaseModel):
@@ -68,6 +70,8 @@ async def _recalc_totals(food_log: FoodLog) -> None:
         total_protein_g=sum(float(i.protein_g) for i in items),
         total_fat_g=sum(float(i.fat_g) for i in items),
         total_carbs_g=sum(float(i.carbs_g) for i in items),
+        total_fiber_g=sum(float(i.fiber_g) for i in items),
+        total_sugar_g=sum(float(i.sugar_g) for i in items),
     )
 
 
@@ -95,6 +99,8 @@ async def _create_log_with_items(
             protein_g=Decimal(str(item.protein_g)),
             fat_g=Decimal(str(item.fat_g)),
             carbs_g=Decimal(str(item.carbs_g)),
+            fiber_g=Decimal(str(item.fiber_g)),
+            sugar_g=Decimal(str(item.sugar_g)),
         )
 
     await _recalc_totals(food_log)
