@@ -18,4 +18,7 @@ from .models import (
     QuestSchema,
     AiTip,
     AiTipSchema,
+    AppSettings,
+    Broadcast,
+    BroadcastSchema,
 )

@@ -63,6 +63,8 @@ TORTOISE_ORM = {
                 "db.models.water_log",
                 "db.models.quest",
                 "db.models.ai_tip",
+                "db.models.app_settings",
+                "db.models.broadcast",
                 "aerich.models",
             ],
             "default_connection": "default",
