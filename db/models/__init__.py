@@ -8,3 +8,5 @@ from .food_item import FoodItem, FoodItemSchema
 from .water_log import WaterLog, WaterLogSchema
 from .quest import Quest, QuestSchema
 from .ai_tip import AiTip, AiTipSchema
+from .app_settings import AppSettings
+from .broadcast import Broadcast, BroadcastSchema
