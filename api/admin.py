@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from io import BytesIO
-from fastapi import APIRouter, HTTPException, Depends, Response
+from fastapi import APIRouter, HTTPException, Depends, Query
 from aiogram.exceptions import TelegramBadRequest
 from fastapi.responses import Response
 from pydantic import BaseModel
