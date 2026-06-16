@@ -19,9 +19,11 @@ GET    /api/admin/broadcasts         — история рассылок
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import aiohttp
+from aiohttp import ClientSession
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -425,30 +427,51 @@ async def get_whitelist(_: User = Depends(get_admin_user)):
     return {"whitelist": result, "enabled": config.WHITELIST_ENABLED}
 
 
+http_session: Optional[aiohttp.ClientSession] = None
+
+
+async def get_http_session() -> Optional[ClientSession]:
+    global http_session
+    if http_session is None:
+        http_session = aiohttp.ClientSession()
+    return http_session
+
+
 @router.get("/users/{user_id}/avatar")
-async def get_user_avatar(user_id: int, _: User = Depends(get_admin_user)):
+async def get_user_avatar(
+        user_id: int,
+        _: User = Depends(get_admin_user),
+        session: aiohttp.ClientSession = Depends(get_http_session)
+):
     """Проксирует аватарку пользователя из Telegram."""
     try:
         photos = await bot.get_user_profile_photos(user_id, limit=1)
         if not photos.photos:
-            raise HTTPException(404, "No avatar")
-        # Берём самый маленький размер (быстрее)
-        file_id = photos.photos[0][-1].file_id
+            raise HTTPException(status_code=404, detail="No avatar")
+
+        # Индекс 0 — самый маленький размер (быстрее скачается)
+        file_id = photos.photos[0][0].file_id
         file = await bot.get_file(file_id)
-        import aiohttp
+
         url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN.get_secret_value()}/{file.file_path}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                data = await resp.read()
-                return Response(
-                    content=data,
-                    media_type="image/jpeg",
-                    headers={"Cache-Control": "public, max-age=3600"},
-                )
+
+        async with session.get(url) as resp:
+            resp.raise_for_status()  # Проверим, что Телеграм ответил 200 OK
+            data = await resp.read()
+
+            return Response(
+                content=data,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
     except HTTPException:
+        # Прокидываем дальше уже сформированные ошибки HTTP
         raise
-    except Exception:
-        raise HTTPException(404, "Avatar not available")
+    except Exception as e:
+        # Логируем реальную причину падения
+        logger.error(f"Error fetching avatar for user {user_id}: {e}")
+        raise HTTPException(status_code=404, detail="Avatar not available")
 
 
 @router.post("/whitelist/{user_id}")
