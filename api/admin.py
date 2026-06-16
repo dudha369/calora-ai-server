@@ -9,8 +9,10 @@ POST   /api/admin/users/{id}/reset   — сброс профиля
 DELETE /api/admin/users/{id}         — удаление аккаунта
 GET    /api/admin/settings      — feature flags
 PUT    /api/admin/settings      — обновить feature flags
+GET    /api/admin/whitelist          — обогащённый whitelist с именами
 POST   /api/admin/whitelist/{id}     — добавить в whitelist
 DELETE /api/admin/whitelist/{id}     — убрать из whitelist
+GET    /api/admin/users/{id}/avatar  — аватарка пользователя (proxy)
 POST   /api/admin/broadcast          — отправить рассылку
 GET    /api/admin/broadcasts         — история рассылок
 """
@@ -21,6 +23,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 from tortoise.expressions import Q
 
@@ -361,6 +364,9 @@ class SettingsUpdate(BaseModel):
     settings: dict[str, str]
 
 
+_DB_SETTINGS_KEYS = {"maintenance_mode", "registration_enabled"}
+
+
 @router.put("/settings")
 async def update_settings(
     body: SettingsUpdate,
@@ -371,8 +377,9 @@ async def update_settings(
             config.WHITELIST_ENABLED = value.lower() in ("true", "1", "yes")
         elif key == "whitelist_ids":
             config.WHITELIST_IDS = value
-        else:
+        elif key in _DB_SETTINGS_KEYS:
             await AppSettings.set_value(key, value)
+        # unknown keys silently ignored
     return {"ok": True}
 
 
@@ -387,6 +394,61 @@ def _get_whitelist_ids() -> set[int]:
 def _save_whitelist_ids(ids: set[int]) -> None:
     """Обновляет whitelist IDs в config runtime."""
     config.WHITELIST_IDS = ",".join(str(i) for i in sorted(ids))
+
+
+@router.get("/whitelist")
+async def get_whitelist(_: User = Depends(get_admin_user)):
+    """Обогащённый whitelist — для каждого ID имя, username и наличие в БД."""
+    ids = _get_whitelist_ids()
+    result = []
+
+    for tid in sorted(ids):
+        entry: dict = {"telegram_id": tid, "full_name": None, "username": None, "in_db": False}
+        # Пробуем найти в БД
+        user = await User.get_or_none(telegram_id=tid)
+        if user:
+            entry["full_name"] = user.full_name
+            entry["username"] = user.username
+            entry["in_db"] = True
+        else:
+            # Fallback: спрашиваем Telegram Bot API
+            try:
+                chat = await bot.get_chat(tid)
+                entry["full_name"] = " ".join(
+                    filter(None, [chat.first_name, chat.last_name])
+                )
+                entry["username"] = chat.username
+            except Exception:
+                entry["full_name"] = str(tid)
+        result.append(entry)
+
+    return {"whitelist": result, "enabled": config.WHITELIST_ENABLED}
+
+
+@router.get("/users/{user_id}/avatar")
+async def get_user_avatar(user_id: int, _: User = Depends(get_admin_user)):
+    """Проксирует аватарку пользователя из Telegram."""
+    try:
+        photos = await bot.get_user_profile_photos(user_id, limit=1)
+        if not photos.photos:
+            raise HTTPException(404, "No avatar")
+        # Берём самый маленький размер (быстрее)
+        file_id = photos.photos[0][-1].file_id
+        file = await bot.get_file(file_id)
+        import aiohttp
+        url = f"https://api.telegram.org/file/bot{config.BOT_TOKEN.get_secret_value()}/{file.file_path}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                data = await resp.read()
+                return Response(
+                    content=data,
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=3600"},
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(404, "Avatar not available")
 
 
 @router.post("/whitelist/{user_id}")
