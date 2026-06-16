@@ -18,6 +18,7 @@ class FoodLog(Model):
                 NULL если добавлено вручную без фото.
 
     total_* пересчитываются в api/food.py после каждого изменения FoodItem.
+    total_fiber_g / total_sugar_g — суммы по всем FoodItem.
     """
 
     user = fields.ForeignKeyField(
@@ -32,6 +33,8 @@ class FoodLog(Model):
     total_protein_g = fields.DecimalField(max_digits=6, decimal_places=1, default=0)
     total_fat_g = fields.DecimalField(max_digits=6, decimal_places=1, default=0)
     total_carbs_g = fields.DecimalField(max_digits=6, decimal_places=1, default=0)
+    total_fiber_g = fields.DecimalField(max_digits=6, decimal_places=1, default=0)
+    total_sugar_g = fields.DecimalField(max_digits=6, decimal_places=1, default=0)
 
     class Meta:
         table = "food_logs"

@@ -8,7 +8,7 @@ get_current_user — единственная точка входа для эн�
 import logging
 import time
 from collections import defaultdict
-from datetime import date as date_type
+from datetime import date as date_type, datetime, timezone
 from typing import Optional
 
 from fastapi import Request, HTTPException, Depends
@@ -137,23 +137,20 @@ async def get_or_create_user(
             "full_name": full_name,
             "username": username,
             "language_code": language_code,
+            "last_active_at": datetime.now(timezone.utc),
         },
     )
 
     if not created:
-        needs_update = (
-            user.full_name != full_name
-            or (username is not None and user.username != username)
-            or (language_code and user.language_code != language_code)
-        )
-        if needs_update:
-            update = {"full_name": full_name}
-            if username is not None:
-                update["username"] = username
-            if language_code:
-                update["language_code"] = language_code
-            await User.filter(telegram_id=telegram_id).update(**update)
-            await user.refresh_from_db()
+        update: dict = {"last_active_at": datetime.now(timezone.utc)}
+        if user.full_name != full_name:
+            update["full_name"] = full_name
+        if username is not None and user.username != username:
+            update["username"] = username
+        if language_code and user.language_code != language_code:
+            update["language_code"] = language_code
+        await User.filter(telegram_id=telegram_id).update(**update)
+        await user.refresh_from_db()
 
     return user
 

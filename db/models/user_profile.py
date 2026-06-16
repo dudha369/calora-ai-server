@@ -9,10 +9,15 @@ class UserProfile(Model):
     Создаётся при завершении онбординга (POST /api/onboarding/complete).
     При изменении любого поля API-хендлер вызывает пересчёт DailyGoal.
 
+    birth_date:     дата рождения — возраст вычисляется динамически,
+                    нормы автоматически обновляются с возрастом.
     gender:         'male' | 'female'
     goal_type:      'lose' | 'maintain' | 'gain'
     activity_level: 'sedentary' | 'light' | 'moderate' | 'active' | 'extreme'
     water_track:    'auto' | 'manual' | 'none'
+    timezone:       IANA timezone (e.g. 'Europe/Kyiv') — для корректных
+                    стриков, квестов и уведомлений по локальному времени.
+    units_preference: 'metric' | 'imperial' — предпочтение отображения.
     dietary_restrictions: ['Вегетарианство', 'Без глютена', ...]
     medical_conditions:   ['Сахарный диабет 2 типа', ...]
     """
@@ -22,7 +27,7 @@ class UserProfile(Model):
     )
 
     gender = fields.CharField(max_length=6)
-    age = fields.SmallIntField()
+    birth_date = fields.DateField()
     height_cm = fields.SmallIntField()
     weight_kg = fields.DecimalField(max_digits=5, decimal_places=1)
 
@@ -36,6 +41,10 @@ class UserProfile(Model):
     dietary_restrictions = fields.JSONField(default=list)
     allergy_note = fields.TextField(null=True)
     medical_conditions = fields.JSONField(default=list)
+
+    timezone = fields.CharField(max_length=40, default="Europe/Kyiv")
+    units_preference = fields.CharField(max_length=10, default="metric")  # metric | imperial
+    updated_at = fields.DatetimeField(auto_now=True)
 
     class Meta:
         table = "user_profiles"

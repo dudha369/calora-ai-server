@@ -3,6 +3,7 @@
 """
 
 import logging
+from datetime import date
 
 from ai.gemini import send_text
 
@@ -38,14 +39,39 @@ Important: adjust calories no more than ±150 from base. Keep it realistic.
 """
 
 
+def calculate_age(birth_date: date, today: date | None = None) -> int:
+    """
+    Вычисляет полный возраст в годах на указанную дату.
+    Учитывает, был ли уже день рождения в текущем году.
+    """
+    if today is None:
+        today = date.today()
+    age = today.year - birth_date.year
+    if (today.month, today.day) < (birth_date.month, birth_date.day):
+        age -= 1
+    return age
+
+
 def calculate_base_goals(profile_data: dict) -> dict:
     """
     Считает базовые нормы по формуле Миффлина-Сент-Жеора.
-    profile_data: {gender, age, height_cm, weight_kg, goal_type, activity_level}
+    profile_data: {gender, birth_date|age, height_cm, weight_kg, goal_type, activity_level}
+
+    Поддерживает оба варианта:
+    - birth_date (date) — вычисляет возраст динамически
+    - age (int) — для обратной совместимости и тестов
     """
     w = float(profile_data["weight_kg"])
     h = float(profile_data["height_cm"])
-    a = int(profile_data["age"])
+
+    if "birth_date" in profile_data and profile_data["birth_date"] is not None:
+        bd = profile_data["birth_date"]
+        if isinstance(bd, str):
+            bd = date.fromisoformat(bd)
+        a = calculate_age(bd)
+    else:
+        a = int(profile_data["age"])
+
     gender_bonus = 5 if profile_data["gender"] == "male" else -161
 
     bmr = 10 * w + 6.25 * h - 5 * a + gender_bonus

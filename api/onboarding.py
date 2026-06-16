@@ -6,13 +6,14 @@ DELETE /api/onboarding/reset   — сбросить профиль/цели → 
 """
 
 import logging
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .utils import get_current_user
+from .utils import get_current_user, parse_date
 from .profile import _recalculate_goals
 from db import User, OnboardingDraft, UserProfile, DailyGoal, WeightHistory
 from ai.services.goal_calculator import calculate_base_goals
@@ -39,7 +40,7 @@ ACTIVITY_MULTIPLIERS = {
 class StepDataIn(BaseModel):
     step: int
     gender: Optional[str] = None
-    age: Optional[int] = None
+    birth_date: Optional[str] = None  # "YYYY-MM-DD"
     height: Optional[int] = None
     weight: Optional[float] = None
     goal: Optional[str] = None
@@ -50,12 +51,13 @@ class StepDataIn(BaseModel):
     water_track: Optional[str] = None
     water_goal: Optional[int] = None
     medical_conditions: Optional[list[str]] = None
+    timezone: Optional[str] = None
 
 
 def _draft_to_response(draft: OnboardingDraft) -> dict:
     return {
         "gender": draft.gender,
-        "age": draft.age,
+        "birth_date": draft.birth_date.isoformat() if draft.birth_date else None,
         "height": draft.height_cm,
         "weight": float(draft.weight_kg) if draft.weight_kg else None,
         "goal": draft.goal,
@@ -66,6 +68,7 @@ def _draft_to_response(draft: OnboardingDraft) -> dict:
         "water_track": draft.water_track,
         "water_goal": draft.water_goal_ml,
         "medical_conditions": draft.medical_conditions,
+        "timezone": draft.timezone,
     }
 
 
@@ -84,8 +87,8 @@ async def save_step(body: StepDataIn, user: User = Depends(get_current_user)):
 
     if body.gender is not None:
         update["gender"] = body.gender
-    if body.age is not None:
-        update["age"] = body.age
+    if body.birth_date is not None:
+        update["birth_date"] = parse_date(body.birth_date)
     if body.height is not None:
         update["height_cm"] = body.height
     if body.weight is not None:
@@ -106,6 +109,8 @@ async def save_step(body: StepDataIn, user: User = Depends(get_current_user)):
         update["water_goal_ml"] = body.water_goal
     if body.medical_conditions is not None:
         update["medical_conditions"] = body.medical_conditions
+    if body.timezone is not None:
+        update["timezone"] = body.timezone
 
     await OnboardingDraft.filter(user_id=user.telegram_id).update(**update)
     return {"ok": True}
@@ -121,7 +126,7 @@ async def complete_onboarding(user: User = Depends(get_current_user)):
         k
         for k, v in {
             "gender": draft.gender,
-            "age": draft.age,
+            "birth_date": draft.birth_date,
             "height_cm": draft.height_cm,
             "weight_kg": draft.weight_kg,
             "goal": draft.goal,
@@ -141,7 +146,7 @@ async def complete_onboarding(user: User = Depends(get_current_user)):
 
     profile_data = dict(
         gender=draft.gender,
-        age=draft.age,
+        birth_date=draft.birth_date,
         height_cm=draft.height_cm,
         weight_kg=float(draft.weight_kg),
         goal_type=draft.goal,
@@ -152,6 +157,7 @@ async def complete_onboarding(user: User = Depends(get_current_user)):
         water_track=draft.water_track,
         water_goal_ml=water_goal_ml,
         allergy_note=draft.allergy_note,
+        timezone=draft.timezone or "Europe/Kyiv",
     )
 
     existing = await UserProfile.get_or_none(user_id=user.telegram_id)
@@ -161,7 +167,9 @@ async def complete_onboarding(user: User = Depends(get_current_user)):
     else:
         profile = await UserProfile.create(user_id=user.telegram_id, **profile_data)
         await WeightHistory.create(
-            user_id=user.telegram_id, weight_kg=profile.weight_kg
+            user_id=user.telegram_id,
+            weight_kg=profile.weight_kg,
+            log_date=date.today(),
         )
 
     # Черновик удаляем ДО вызова AI — пользователь уже "завершил" онбординг
@@ -175,7 +183,7 @@ async def complete_onboarding(user: User = Depends(get_current_user)):
         # Fallback: Mifflin-St Jeor без AI
         goals = calculate_base_goals({
             "gender": profile.gender,
-            "age": profile.age,
+            "birth_date": profile.birth_date,
             "height_cm": profile.height_cm,
             "weight_kg": float(profile.weight_kg),
             "goal_type": profile.goal_type,

@@ -36,21 +36,21 @@ async def test_save_step(client: AsyncClient):
 async def test_save_multiple_steps(client: AsyncClient):
     """Multiple step saves accumulate data in the draft."""
     await client.post("/api/onboarding/step", json={"step": 2, "gender": "female"})
-    await client.post("/api/onboarding/step", json={"step": 3, "age": 30})
+    await client.post("/api/onboarding/step", json={"step": 3, "birth_date": "1996-06-12"})
     await client.post("/api/onboarding/step", json={"step": 4, "height": 165})
 
     resp = await client.get("/api/onboarding/progress")
     data = resp.json()
     assert data["step"] == 4
     assert data["data"]["gender"] == "female"
-    assert data["data"]["age"] == 30
+    assert data["data"]["birth_date"] == "1996-06-12"
     assert data["data"]["height"] == 165
 
 
 @pytest.mark.asyncio
 async def test_complete_onboarding_missing_fields(client: AsyncClient):
     """Complete fails if required fields are missing."""
-    # Only save gender — missing age, height, weight, etc.
+    # Only save gender — missing birth_date, height, weight, etc.
     await client.post("/api/onboarding/step", json={"step": 2, "gender": "male"})
 
     resp = await client.post("/api/onboarding/complete")
@@ -73,7 +73,7 @@ async def test_complete_onboarding_success(mock_recalc, client: AsyncClient):
 
     # Save all required steps
     await client.post("/api/onboarding/step", json={"step": 2, "gender": "male"})
-    await client.post("/api/onboarding/step", json={"step": 3, "age": 25})
+    await client.post("/api/onboarding/step", json={"step": 3, "birth_date": "2001-06-12"})
     await client.post("/api/onboarding/step", json={"step": 4, "height": 180})
     await client.post("/api/onboarding/step", json={"step": 5, "weight": 80.0})
     await client.post("/api/onboarding/step", json={"step": 6, "goal": "lose"})

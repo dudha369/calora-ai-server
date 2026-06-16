@@ -8,7 +8,7 @@ from tests.conftest import FAKE_TG_USER_ID
 
 PROFILE_DATA = {
     "gender": "female",
-    "age": 30,
+    "birth_date": "1996-06-12",
     "height_cm": 165,
     "weight_kg": 60.0,
     "goal_type": "maintain",

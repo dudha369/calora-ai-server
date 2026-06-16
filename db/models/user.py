@@ -9,6 +9,9 @@ class User(Model):
     telegram_id — реальный TG ID, не auto-increment (generated=False отключает SERIAL).
     Стрик считается по выполнению дневной КБЖУ-цели, не по открытию приложения.
     Обновляется в ai/services/daily_close.py при проверке итогов дня.
+
+    last_active_at — обновляется при каждом API-запросе (get_current_user).
+    is_active / deleted_at — для soft delete (GDPR, восстановление аккаунтов).
     """
 
     telegram_id = fields.BigIntField(pk=True, generated=False)
@@ -21,6 +24,10 @@ class User(Model):
     quests_completed = fields.IntField(default=0)
 
     created_at = fields.DatetimeField(auto_now_add=True)
+    last_active_at = fields.DatetimeField(null=True)
+
+    is_active = fields.BooleanField(default=True)
+    deleted_at = fields.DatetimeField(null=True)
 
     class Meta:
         table = "users"
