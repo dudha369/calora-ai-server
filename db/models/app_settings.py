@@ -34,7 +34,7 @@ class AppSettings(Model):
 
     @classmethod
     async def set_value(cls, key: str, value: str) -> None:
-        await cls.update_or_create({"value": value}, pk=key)
+        await cls.update_or_create({"value": value}, key=key)
 
     @classmethod
     async def get_all_dict(cls) -> dict[str, str]:
