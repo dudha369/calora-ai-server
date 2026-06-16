@@ -87,10 +87,10 @@ async def dashboard(_: User = Depends(get_admin_user)):
     stuck_onboarding = await OnboardingDraft.all().count()
 
     # Активность сегодня (уникальные юзеры с food_log или water_log)
-    food_active = await FoodLog.filter(log_date=today).distinct().values_list(
+    food_active = await FoodLog.filter(log_date=today).values_list(
         "user_id", flat=True
     )
-    water_active = await WaterLog.filter(log_date=today).distinct().values_list(
+    water_active = await WaterLog.filter(log_date=today).values_list(
         "user_id", flat=True
     )
     dau = len(set(food_active) | set(water_active))
@@ -116,10 +116,10 @@ async def dashboard(_: User = Depends(get_admin_user)):
     dau_trend = []
     for i in range(7):
         d = today - timedelta(days=6 - i)
-        fa = await FoodLog.filter(log_date=d).distinct().values_list(
+        fa = await FoodLog.filter(log_date=d).values_list(
             "user_id", flat=True
         )
-        wa = await WaterLog.filter(log_date=d).distinct().values_list(
+        wa = await WaterLog.filter(log_date=d).values_list(
             "user_id", flat=True
         )
         dau_trend.append({"date": d.isoformat(), "dau": len(set(fa) | set(wa))})
@@ -188,10 +188,10 @@ async def list_users(
         qs = qs.filter(telegram_id__in=stuck_ids)
     elif filter == "active_today":
         today = datetime.now(timezone.utc).date()
-        fa = await FoodLog.filter(log_date=today).distinct().values_list(
+        fa = await FoodLog.filter(log_date=today).values_list(
             "user_id", flat=True
         )
-        wa = await WaterLog.filter(log_date=today).distinct().values_list(
+        wa = await WaterLog.filter(log_date=today).values_list(
             "user_id", flat=True
         )
         active_ids = set(fa) | set(wa)
@@ -202,7 +202,7 @@ async def list_users(
     users = await qs.order_by("-created_at").offset(offset).limit(per_page)
 
     # Enrich
-    whitelist_ids = await _get_whitelist_ids()
+    whitelist_ids = _get_whitelist_ids()
     onboarded_ids_set = set(
         await UserProfile.all().values_list("user_id", flat=True)
     )
@@ -290,7 +290,7 @@ async def get_user_detail(
         for q in quests
     ]
 
-    whitelist_ids = await _get_whitelist_ids()
+    whitelist_ids = _get_whitelist_ids()
 
     return {
         "user": {
@@ -346,8 +346,15 @@ async def delete_user(user_id: int, _: User = Depends(get_admin_user)):
 
 @router.get("/settings")
 async def get_settings(_: User = Depends(get_admin_user)):
-    settings = await AppSettings.get_all_dict()
-    return {"settings": settings}
+    """Читает настройки из config (env) — единый источник правды."""
+    return {
+        "settings": {
+            "whitelist_enabled": str(config.WHITELIST_ENABLED).lower(),
+            "whitelist_ids": config.WHITELIST_IDS,
+            "maintenance_mode": await AppSettings.get_value("maintenance_mode", "false"),
+            "registration_enabled": await AppSettings.get_value("registration_enabled", "true"),
+        }
+    }
 
 
 class SettingsUpdate(BaseModel):
@@ -360,44 +367,41 @@ async def update_settings(
     _: User = Depends(get_admin_user),
 ):
     for key, value in body.settings.items():
-        await AppSettings.set_value(key, value)
+        if key == "whitelist_enabled":
+            config.WHITELIST_ENABLED = value.lower() in ("true", "1", "yes")
+        elif key == "whitelist_ids":
+            config.WHITELIST_IDS = value
+        else:
+            await AppSettings.set_value(key, value)
     return {"ok": True}
 
 
 # ── Whitelist ────────────────────────────────────────────────────────────────
 
 
-async def _get_whitelist_ids() -> set[int]:
-    """Получает whitelist IDs из DB-настроек."""
-    raw = await AppSettings.get_value("whitelist_ids", "")
-    result: set[int] = set()
-    for part in raw.split(","):
-        part = part.strip()
-        if part.isdigit():
-            result.add(int(part))
-    return result
+def _get_whitelist_ids() -> set[int]:
+    """Читает whitelist IDs из config (тот же источник что api/utils.py)."""
+    return config.whitelist_ids
 
 
-async def _save_whitelist_ids(ids: set[int]) -> None:
-    """Сохраняет whitelist IDs в DB."""
-    await AppSettings.set_value(
-        "whitelist_ids", ",".join(str(i) for i in sorted(ids))
-    )
+def _save_whitelist_ids(ids: set[int]) -> None:
+    """Обновляет whitelist IDs в config runtime."""
+    config.WHITELIST_IDS = ",".join(str(i) for i in sorted(ids))
 
 
 @router.post("/whitelist/{user_id}")
 async def add_to_whitelist(user_id: int, _: User = Depends(get_admin_user)):
-    ids = await _get_whitelist_ids()
+    ids = _get_whitelist_ids()
     ids.add(user_id)
-    await _save_whitelist_ids(ids)
+    _save_whitelist_ids(ids)
     return {"ok": True, "whitelist_ids": sorted(ids)}
 
 
 @router.delete("/whitelist/{user_id}")
 async def remove_from_whitelist(user_id: int, _: User = Depends(get_admin_user)):
-    ids = await _get_whitelist_ids()
+    ids = _get_whitelist_ids()
     ids.discard(user_id)
-    await _save_whitelist_ids(ids)
+    _save_whitelist_ids(ids)
     return {"ok": True, "whitelist_ids": sorted(ids)}
 
 
@@ -477,10 +481,10 @@ async def _get_broadcast_recipients(segment: str) -> list[int]:
 
     elif segment == "active":
         week_ago = today - timedelta(days=7)
-        fa = await FoodLog.filter(log_date__gte=week_ago).distinct().values_list(
+        fa = await FoodLog.filter(log_date__gte=week_ago).values_list(
             "user_id", flat=True
         )
-        wa = await WaterLog.filter(log_date__gte=week_ago).distinct().values_list(
+        wa = await WaterLog.filter(log_date__gte=week_ago).values_list(
             "user_id", flat=True
         )
         return list(set(fa) | set(wa))
@@ -489,10 +493,10 @@ async def _get_broadcast_recipients(segment: str) -> list[int]:
         week_ago = today - timedelta(days=7)
         active_fa = await FoodLog.filter(
             log_date__gte=week_ago
-        ).distinct().values_list("user_id", flat=True)
+        ).values_list("user_id", flat=True)
         active_wa = await WaterLog.filter(
             log_date__gte=week_ago
-        ).distinct().values_list("user_id", flat=True)
+        ).values_list("user_id", flat=True)
         active = set(active_fa) | set(active_wa)
         all_ids = set(await User.all().values_list("telegram_id", flat=True))
         return list(all_ids - active)
