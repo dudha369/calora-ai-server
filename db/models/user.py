@@ -22,6 +22,7 @@ class User(Model):
     current_streak = fields.IntField(default=0)
     max_streak = fields.IntField(default=0)
     quests_completed = fields.IntField(default=0)
+    last_streak_check_date = fields.DateField(null=True)
 
     created_at = fields.DatetimeField(auto_now_add=True)
     last_active_at = fields.DatetimeField(null=True)
