@@ -75,6 +75,12 @@ async def get_active_dates(
     to: str = Query(...),
     user: User = Depends(get_current_user),
 ):
+    """
+    Возвращает по каждой активной дате отдельные флаги has_food/has_water
+    (а не плоский список) — нужно для UI-маркеров в DateStrip/Calendar,
+    которые красят точку по-разному в зависимости от того, что именно
+    залогировано в этот день.
+    """
     d_from = parse_date(from_)
     d_to = parse_date(to)
 
@@ -90,6 +96,13 @@ async def get_active_dates(
         log_date__lte=d_to,
     ).values_list("log_date", flat=True)
 
-    all_dates = sorted({d.isoformat() for d in [*food_dates, *water_dates]})
+    food_set = {d.isoformat() for d in food_dates}
+    water_set = {d.isoformat() for d in water_dates}
+    all_dates = sorted(food_set | water_set)
 
-    return {"dates": all_dates}
+    return {
+        "dates": [
+            {"date": d, "has_food": d in food_set, "has_water": d in water_set}
+            for d in all_dates
+        ]
+    }

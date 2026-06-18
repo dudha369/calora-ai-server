@@ -64,7 +64,7 @@ async def test_daily_stats_no_goals(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_active_dates(client: AsyncClient, seeded_user):
-    """GET /api/stats/active-dates returns dates with data."""
+    """GET /api/stats/active-dates returns dates with has_food/has_water flags."""
     await client.post("/api/food/log", json={
         "log_date": "2026-06-10",
         "items": [{"food_name": "A", "portion_g": 100, "calories": 100,
@@ -74,10 +74,11 @@ async def test_active_dates(client: AsyncClient, seeded_user):
 
     resp = await client.get("/api/stats/active-dates?from=2026-06-01&to=2026-06-30")
     assert resp.status_code == 200
-    dates = resp.json()["dates"]
-    assert "2026-06-10" in dates
-    assert "2026-06-12" in dates
-    assert "2026-06-11" not in dates
+    by_date = {e["date"]: e for e in resp.json()["dates"]}
+
+    assert by_date["2026-06-10"] == {"date": "2026-06-10", "has_food": True, "has_water": False}
+    assert by_date["2026-06-12"] == {"date": "2026-06-12", "has_food": False, "has_water": True}
+    assert "2026-06-11" not in by_date
 
 
 @pytest.mark.asyncio
