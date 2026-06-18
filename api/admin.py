@@ -47,7 +47,8 @@ from db import (
 from db.models.app_settings import AppSettings
 from db.models.broadcast import Broadcast
 from services.storage import delete_food_photos
-from services.daily_close import close_completed_days
+from services.reminders import send_daily_reminders
+from services.streaks import reconcile_streak
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -165,13 +166,10 @@ async def dashboard(_: User = Depends(get_admin_user)):
 # ── Cron (manual trigger) ────────────────────────────────────────────────────
 
 
-@router.post("/cron/close-streaks")
-async def manually_close_streaks(_: User = Depends(get_admin_user)):
-    """
-    Вручную запускает закрытие дня (стрики + синхронизация квестов
-    quest_key='streak') без ожидания часового тика APScheduler.
-    """
-    return await close_completed_days()
+@router.post("/cron/send-reminders")
+async def manually_send_reminders(_: User = Depends(get_admin_user)):
+    """Вручную запускает рассылку напоминаний — для отладки send_daily_reminders."""
+    return await send_daily_reminders()
 
 
 # ── Users ────────────────────────────────────────────────────────────────────
@@ -271,6 +269,14 @@ async def get_user_detail(
         if goal
         else None
     )
+
+    # Тот же контракт, что у /api/users/me — иначе админка показывает
+    # протухший стрик. profile/goal тут уже под рукой, лишних запросов нет.
+    if profile and goal:
+        try:
+            await reconcile_streak(user, profile.timezone, goal)
+        except Exception:
+            logger.exception("streak reconcile failed for user %s", user_id)
 
     # Последние 10 записей еды
     food_logs = await FoodLog.filter(user_id=user_id).order_by("-logged_at").limit(10)

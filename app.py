@@ -6,15 +6,12 @@ from tortoise import Tortoise
 
 from bot_instance import bot, dp
 from config import TORTOISE_ORM, config
-from services.daily_close import close_completed_days
+from services.reminders import send_daily_reminders
 
-# Один процесс — один scheduler. AsyncIOScheduler работает на том же event
-# loop, что и uvicorn, без отдельных потоков/процессов.
 scheduler = AsyncIOScheduler(timezone="UTC")
 
 
 async def lifespan(app: FastAPI) -> AsyncGenerator:
-    # ── Startup ──────────────────────────────────────────────────
     from api.common import WEBHOOK_SECRET
 
     webhook_url = config.WEBHOOK_URL.get_secret_value().rstrip("/")
@@ -26,14 +23,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     )
     await Tortoise.init(TORTOISE_ORM)
 
-    # Раз в час, на 5-й минуте. max_instances=1 не даёт двум прогонам
-    # пересечься, если предыдущий не успел закрыться за час (защита от
-    # гонок при записи одной и той же строки User).
+    # Стрик больше не закрывается батчем (см. services/streaks.py) — этот
+    # таймер теперь только под напоминания.
     scheduler.add_job(
-        close_completed_days,
+        send_daily_reminders,
         trigger="cron",
         minute=5,
-        id="daily_close",
+        id="daily_reminders",
         max_instances=1,
         misfire_grace_time=600,
     )
@@ -41,7 +37,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     yield
 
-    # ── Shutdown ─────────────────────────────────────────────────
+    scheduler.shutdown(wait=False)
     await bot.session.close()
     await Tortoise.close_connections()
 

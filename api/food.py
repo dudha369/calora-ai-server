@@ -10,6 +10,7 @@ DELETE /api/food/photo/{photo_key:path} — удалить неиспользо�
 import asyncio
 import logging
 import re
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
@@ -17,10 +18,11 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from pydantic import BaseModel
 
 from .utils import auth, get_current_user, check_rate_limit, parse_date
-from db import User, FoodLog, FoodLogSchema, FoodItem, FoodItemSchema
+from db import User, FoodLog, FoodLogSchema, FoodItem, FoodItemSchema, UserProfile, DailyGoal
 from ai.gemini import GeminiUnavailableError
 from ai.services.food_analyzer import analyze_food_photo
 from services.storage import upload_food_photo, get_photo_url, delete_food_photo
+from services.streaks import credit_today_if_goal_met
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/food", tags=["food"])
@@ -61,6 +63,20 @@ class BarcodeLogIn(BaseModel):
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+
+async def _maybe_credit_streak(user: User, log_date: date) -> None:
+    """
+    Побочный эффект записи еды: продлевает стрик, если log_date — сегодня
+    в локальном времени пользователя и калории попали в норму.
+    """
+    profile = await UserProfile.get_or_none(user_id=user.telegram_id)
+    if not profile:
+        return
+    goal = await DailyGoal.get_or_none(user_id=user.telegram_id)
+    if not goal:
+        return
+    await credit_today_if_goal_met(user, goal, profile.timezone, log_date)
 
 
 async def _recalc_totals(food_log: FoodLog) -> None:
@@ -105,6 +121,13 @@ async def _create_log_with_items(
 
     await _recalc_totals(food_log)
     await food_log.refresh_from_db()
+
+    # Побочный эффект, не основная функция эндпоинта — баг здесь не должен
+    # ронять сохранение еды.
+    try:
+        await _maybe_credit_streak(user, log_date)
+    except Exception:
+        logger.exception("streak credit failed for user %s", user.telegram_id)
 
     items_data = await FoodItemSchema.from_queryset(
         FoodItem.filter(food_log_id=food_log.id)
