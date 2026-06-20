@@ -15,6 +15,8 @@ from google import genai
 from google.genai import types
 from config import config
 
+from typing import Optional
+
 logger = logging.getLogger(__name__)
 
 _client = genai.Client(api_key=config.GEMINI_API_KEY.get_secret_value())
@@ -56,7 +58,7 @@ async def _with_retry(coro_factory, *, operation: str):
     coro_factory — callable без аргументов, возвращает новый coroutine
     при каждом вызове (coroutine нельзя повторно await-ить).
     """
-    last_exc: Exception | None = None
+    last_exc: Optional[Exception] = None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -142,14 +144,24 @@ async def send_text(system_prompt: str, user_message: str) -> dict:
 
 
 async def analyze_image(
-    system_prompt: str, image_bytes: bytes, mime_type: str = "image/jpeg"
+    system_prompt: str,
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    user_note: Optional[str] = None,
 ) -> dict:
+    instruction = "Analyze the food in this image."
+    if user_note:
+        # Appended, not prepended — the model sees the fixed task first,
+        # then the user's note, which is more robust if the note itself
+        # reads like an instruction ("ignore calories" etc.).
+        instruction += f" User clarification: {user_note.strip()}"
+
     def _make_coro():
         return _client.aio.models.generate_content(
             model=MODEL,
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                "Analyze the food in this image.",
+                instruction,
             ],
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,

@@ -5,6 +5,14 @@ POST /api/food/log-barcode — сохранить запись по штрихк
 GET  /api/food/{date}     — все записи за дату (YYYY-MM-DD)
 DELETE /api/food/{log_id} — удалить запись (+ фото из B2)
 DELETE /api/food/photo/{photo_key:path} — удалить неиспользованное фото
+
+/analyze принимает опциональное поле формы `notes` — уточнение пользователя,
+введённое после съёмки фото (см. ai/services/food_analyzer.py).
+
+/log принимает опциональное поле `water_ml` — суммарную гидратацию,
+которую ИИ нашёл среди распознанных блюд/напитков. Если оно больше 0,
+после сохранения FoodLog автоматически создаётся запись в WaterLog —
+так вода логируется без отдельного действия пользователя.
 """
 
 import asyncio
@@ -14,11 +22,20 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from pydantic import BaseModel
 
 from .utils import auth, get_current_user, check_rate_limit, parse_date
-from db import User, FoodLog, FoodLogSchema, FoodItem, FoodItemSchema, UserProfile, DailyGoal
+from db import (
+    User,
+    FoodLog,
+    FoodLogSchema,
+    FoodItem,
+    FoodItemSchema,
+    UserProfile,
+    DailyGoal,
+    WaterLog,
+)
 from ai.gemini import GeminiUnavailableError
 from ai.services.food_analyzer import analyze_food_photo
 from services.storage import upload_food_photo, get_photo_url, delete_food_photo
@@ -32,6 +49,7 @@ router = APIRouter(prefix="/api/food", tags=["food"])
 MAX_ANALYZE_PER_MINUTE = 5
 MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+MAX_NOTES_LENGTH = 300
 
 # Паттерн валидного photo_key: food/{user_id}/{uuid}.{ext}
 _PHOTO_KEY_RE = re.compile(r"^food/\d+/[a-f0-9]+\.\w+$")
@@ -55,6 +73,9 @@ class FoodLogIn(BaseModel):
     log_date: str
     items: list[FoodItemIn]
     photo_key: Optional[str] = None  # ключ объекта в B2, не URL
+    # Суммарная гидратация, найденная ИИ среди блюд/напитков на фото.
+    # Если > 0 — после сохранения FoodLog автоматически создаётся WaterLog.
+    water_ml: Optional[int] = None
 
 
 class BarcodeLogIn(BaseModel):
@@ -79,6 +100,22 @@ async def _maybe_credit_streak(user: User, log_date: date) -> None:
     await credit_today_if_goal_met(user, goal, profile.timezone, log_date)
 
 
+async def _maybe_log_water(user: User, log_date: date, water_ml: Optional[int]) -> None:
+    """
+    Побочный эффект записи еды: если ИИ нашёл воду/напитки на фото, создаёт
+    запись в WaterLog для той же даты. Best-effort, как и _maybe_credit_streak —
+    ошибка здесь не должна ронять сохранение самой еды.
+    """
+    if not water_ml or water_ml <= 0:
+        return
+    try:
+        await WaterLog.create(
+            user_id=user.telegram_id, log_date=log_date, amount_ml=water_ml
+        )
+    except Exception:
+        logger.exception("auto water log failed for user %s", user.telegram_id)
+
+
 async def _recalc_totals(food_log: FoodLog) -> None:
     items = await FoodItem.filter(food_log_id=food_log.id).all()
     await FoodLog.filter(id=food_log.id).update(
@@ -96,6 +133,7 @@ async def _create_log_with_items(
     body_log_date: str,
     body_items: list[FoodItemIn],
     photo_key: Optional[str] = None,
+    water_ml: Optional[int] = None,
 ) -> dict:
     """Общая логика создания FoodLog + FoodItems для /log и /log-barcode."""
     log_date = parse_date(body_log_date)
@@ -122,12 +160,14 @@ async def _create_log_with_items(
     await _recalc_totals(food_log)
     await food_log.refresh_from_db()
 
-    # Побочный эффект, не основная функция эндпоинта — баг здесь не должен
+    # Побочные эффекты, не основная функция эндпоинта — баг здесь не должен
     # ронять сохранение еды.
     try:
         await _maybe_credit_streak(user, log_date)
     except Exception:
         logger.exception("streak credit failed for user %s", user.telegram_id)
+
+    await _maybe_log_water(user, log_date, water_ml)
 
     items_data = await FoodItemSchema.from_queryset(
         FoodItem.filter(food_log_id=food_log.id)
@@ -158,6 +198,7 @@ async def create_log_from_barcode(
 async def analyze_photo(
     request: Request,
     file: UploadFile = File(...),
+    notes: Optional[str] = Form(None, max_length=MAX_NOTES_LENGTH),
     user: User = Depends(get_current_user),
 ):
     # ── Rate limiting ──
@@ -182,11 +223,10 @@ async def analyze_photo(
     # Загружаем фото параллельно с анализом — экономим ~300-500ms
     try:
         result, photo_key = await asyncio.gather(
-            analyze_food_photo(image_bytes, mime_type),
+            analyze_food_photo(image_bytes, mime_type, notes=notes),
             upload_food_photo(image_bytes, user.telegram_id, mime_type),
         )
     except GeminiUnavailableError as exc:
-        # 503 от Gemini после всех retry — сообщаем клиенту корректно
         logger.warning("Gemini unavailable for user %s: %s", user.telegram_id, exc)
         raise HTTPException(
             status_code=503,
@@ -206,7 +246,7 @@ async def analyze_photo(
 @router.post("/log")
 async def create_log(body: FoodLogIn, user: User = Depends(get_current_user)):
     return await _create_log_with_items(
-        user, body.log_date, body.items, photo_key=body.photo_key
+        user, body.log_date, body.items, photo_key=body.photo_key, water_ml=body.water_ml
     )
 
 
@@ -241,6 +281,8 @@ async def get_logs_by_date(log_date: str, user: User = Depends(get_current_user)
             "protein_g": sum(float(l["total_protein_g"]) for l in result),
             "fat_g":     sum(float(l["total_fat_g"]) for l in result),
             "carbs_g":   sum(float(l["total_carbs_g"]) for l in result),
+            "fiber_g":   sum(float(l["total_fiber_g"]) for l in result),
+            "sugar_g":   sum(float(l["total_sugar_g"]) for l in result),
         },
     }
 
