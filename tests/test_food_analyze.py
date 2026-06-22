@@ -18,17 +18,29 @@ def clear_rate_limits():
 @pytest.mark.asyncio
 @patch("api.food.analyze_food_photo", new_callable=AsyncMock)
 @patch("api.food.upload_food_photo", new_callable=AsyncMock)
-async def test_analyze_success(mock_upload, mock_analyze, client: AsyncClient, seeded_user):
+async def test_analyze_success(
+    mock_upload, mock_analyze, client: AsyncClient, seeded_user
+):
     """POST /api/food/analyze returns analysis result."""
     mock_analyze.return_value = {
-        "items": [{"food_name": "Салат", "portion_g": 200, "calories": 150,
-                    "protein_g": 5, "fat_g": 8, "carbs_g": 10}]
+        "items": [
+            {
+                "food_name": "Салат",
+                "portion_g": 200,
+                "calories": 150,
+                "protein_g": 5,
+                "fat_g": 8,
+                "carbs_g": 10,
+            }
+        ]
     }
     mock_upload.return_value = "food/123/abc.jpg"
 
     resp = await client.post(
         "/api/food/analyze",
-        files={"file": ("photo.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 100, "image/jpeg")},
+        files={
+            "file": ("photo.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 100, "image/jpeg")
+        },
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -62,7 +74,9 @@ async def test_analyze_file_too_large(client: AsyncClient, seeded_user):
 @pytest.mark.asyncio
 @patch("api.food.analyze_food_photo", new_callable=AsyncMock)
 @patch("api.food.upload_food_photo", new_callable=AsyncMock)
-async def test_analyze_rate_limit(mock_upload, mock_analyze, client: AsyncClient, seeded_user):
+async def test_analyze_rate_limit(
+    mock_upload, mock_analyze, client: AsyncClient, seeded_user
+):
     """POST /api/food/analyze enforces rate limiting."""
     mock_analyze.return_value = {"items": []}
     mock_upload.return_value = "food/123/abc.jpg"
@@ -98,7 +112,9 @@ async def test_analyze_unrecognized_food(
 
     resp = await client.post(
         "/api/food/analyze",
-        files={"file": ("photo.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 100, "image/jpeg")},
+        files={
+            "file": ("photo.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 100, "image/jpeg")
+        },
     )
     assert resp.status_code == 422
     mock_delete.assert_called_once_with("food/123/abc.jpg")

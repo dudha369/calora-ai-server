@@ -86,7 +86,9 @@ async def test_generate_quests(mock_gen, client: AsyncClient, seeded_user):
 
 @pytest.mark.asyncio
 @patch("api.quests.generate_weekly_quests", new_callable=AsyncMock)
-async def test_generate_quests_too_many_active(mock_gen, client: AsyncClient, seeded_user):
+async def test_generate_quests_too_many_active(
+    mock_gen, client: AsyncClient, seeded_user
+):
     """POST /api/quests/generate returns 409 when too many active quests."""
     # Create 6 active quests (MAX_ACTIVE_QUESTS)
     for i in range(6):

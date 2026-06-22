@@ -1,15 +1,21 @@
 """
-Логика стрика: продление событием (после лога еды) + ленивое обнаружение
-обрыва (при чтении данных пользователя). Никакого батча по всем юзерам —
-стрик полностью event-driven.
+Логика стрика: продление/откат событием (после лога/удаления еды) +
+ленивое обнаружение обрыва (при чтении данных пользователя). Никакого
+батча по всем юзерам — стрик полностью event-driven.
 
-  • продление — POST /api/food/log[-barcode], сразу как калории за сегодня
-    попали в ±10% от DailyGoal.calories;
+  • продление/откат — POST /api/food/log[-barcode] и DELETE /api/food/{id}
+    дёргают одну и ту же sync_today_credit_state: она смотрит на факт
+    (выполнена ли норма сегодня прямо сейчас) и либо начисляет кредит,
+    либо снимает, либо ничего не делает. Это заменило собой две раздельные
+    функции (credit/uncredit), у которых был пробел: переедание → удаление
+    лишней записи → возврат в норму не давало кредита, пока пользователь
+    не сделает ещё один POST. Симметричная проверка закрывает это для
+    обоих направлений одним кодом.
   • обрыв — обнаруживается лениво, в местах, которые читают
-    User.current_streak: GET /api/users/me и GET /api/admin/users/{id}.
-    Раз пользователь не дологировал — события, на которое можно было бы
-    среагировать сразу, просто не происходит, поэтому обрыв ловится не
-    "в моменте", а при следующем чтении.
+    User.current_streak: GET /api/users/me, GET /api/users/streak и
+    GET /api/admin/users/{id}. Раз пользователь не дологировал — события,
+    на которое можно было бы среагировать сразу, просто не происходит,
+    поэтому обрыв ловится не "в моменте", а при следующем чтении.
 
 Критерий "успешного дня" (совпадает с quest_key='calorie_goal' из quest.py):
   total_calories за день попадает в ±10% от DailyGoal.calories.
@@ -18,8 +24,6 @@
   User.last_streak_check_date — последняя дата (в локальном времени
   пользователя), за которую серия уже учтена. Может указывать на СЕГОДНЯ
   (кредит уже выдан в течение дня) или на день до границы reconcile.
-  Защищает и от повторного начисления при нескольких food/log за день,
-  и от повторного обрыва при нескольких /me за день.
 
 MAX_BACKFILL_DAYS — защита не от обычного простоя (он закрывается день за
 днём корректно по реальным FoodLog), а от аномальных данных типа
@@ -38,7 +42,17 @@ CALORIE_TOLERANCE_PCT = 0.10
 MAX_BACKFILL_DAYS = 365
 
 
-def _local_today(tz_name: str) -> date:
+def local_today(tz_name: str) -> date:
+    """
+    Текущая календарная дата в локальном времени пользователя.
+
+    Публичная (без подчёркивания), потому что переиспользуется не только
+    внутри этого модуля: GET /api/users/streak отдаёт прогресс за "сегодня"
+    через get_today_progress ниже — но именно тот вызов остаётся ВНУТРИ
+    этого файла, а не в api/users.py, ровно чтобы patch("services.streaks
+    .local_today", ...) в тестах одинаково подменял дату для reconcile,
+    sync_today_credit_state и get_today_progress.
+    """
     try:
         tz = ZoneInfo(tz_name)
     except ZoneInfoNotFoundError:
@@ -72,13 +86,12 @@ async def _sync_streak_quest(user: User) -> None:
 async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal) -> bool:
     """
     Закрывает все ПОЛНОСТЬЮ прошедшие дни (строго до сегодняшней локальной
-    даты). Сегодняшний день не трогает — это работа credit_today_if_goal_met.
+    даты). Сегодняшний день не трогает — это работа sync_today_credit_state.
 
     Самый частый случай (юзер уже заходил сегодня или вчера) выходит после
-    одного сравнения дат, без единого запроса к БД — важно, так как вызов
-    висит на каждом GET /api/users/me.
+    одного сравнения дат, без единого запроса к БД.
     """
-    today = _local_today(tz_name)
+    today = local_today(tz_name)
     last_checked = user.last_streak_check_date or (today - timedelta(days=1))
     pending_days = (today - last_checked).days - 1
 
@@ -90,7 +103,8 @@ async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal) -> bool:
     if pending_days > MAX_BACKFILL_DAYS:
         logger.warning(
             "User %s has %d pending days — treating as corrupted state",
-            user.telegram_id, pending_days,
+            user.telegram_id,
+            pending_days,
         )
         user.current_streak = 0
     else:
@@ -109,28 +123,76 @@ async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal) -> bool:
     return user.current_streak != streak_before
 
 
-async def credit_today_if_goal_met(
+async def sync_today_credit_state(
     user: User, goal: DailyGoal, tz_name: str, log_date: date
 ) -> None:
     """
-    Вызывается сразу после сохранения FoodLog. Если log_date — это СЕГОДНЯ в
-    локальном времени пользователя, добирает пропущенные прошлые дни и
-    выдаёт мгновенный кредит, если калории на сегодня попали в норму.
-    Запись задним числом (log_date в прошлом) стрик здесь не продлевает —
-    это закроет reconcile_streak при следующем GET /me.
+    Единая точка синхронизации кредита за сегодня — вызывается и после
+    создания, и после удаления FoodLog. Смотрит на факт ("выполнена ли
+    норма прямо сейчас") и либо начисляет, либо снимает кредит, либо не
+    делает ничего, если состояние уже соответствует факту.
+
+    Не реагирует на log_date в прошлом — обработка прошлых дней это
+    отдельно работа reconcile_streak, не эта функция.
     """
-    today = _local_today(tz_name)
+    today = local_today(tz_name)
     if log_date != today:
         return
 
     await reconcile_streak(user, tz_name, goal)
 
-    if user.last_streak_check_date == today:
-        return  # сегодня уже засчитано — вторая запись еды не задвоит
+    goal_met = await _day_goal_met(user.telegram_id, today, goal)
+    already_credited = user.last_streak_check_date == today
 
-    if await _day_goal_met(user.telegram_id, today, goal):
+    if goal_met and not already_credited:
         user.current_streak += 1
         user.max_streak = max(user.max_streak, user.current_streak)
         user.last_streak_check_date = today
         await _sync_streak_quest(user)
         await user.save()
+    elif not goal_met and already_credited:
+        user.current_streak = max(user.current_streak - 1, 0)
+        user.last_streak_check_date = today - timedelta(days=1)
+        await _sync_streak_quest(user)
+        await user.save()
+    # иначе: текущее состояние уже соответствует факту, ничего не делаем
+
+
+def is_streak_active_today(user: User, tz_name: str) -> bool:
+    """True, если кредит за сегодня уже выдан."""
+    return user.last_streak_check_date == local_today(tz_name)
+
+
+async def get_today_progress(user_id: int, tz_name: str, goal: DailyGoal) -> dict:
+    """
+    Прогресс по калориям за сегодня относительно допустимого диапазона
+    (±CALORIE_TOLERANCE_PCT от DailyGoal.calories). Используется попапом
+    "Серия" на HomePage (GET /api/users/streak), чтобы показать, сколько
+    ещё нужно набрать, или что норма уже превышена.
+
+    Принимает user_id (не полный User), потому что только читает данные —
+    мутаций здесь нет, в отличие от reconcile_streak/sync_today_credit_state.
+    """
+    today = local_today(tz_name)
+    logs = await FoodLog.filter(user_id=user_id, log_date=today).all()
+    calories = sum(log.total_calories for log in logs)
+
+    tolerance = round(goal.calories * CALORIE_TOLERANCE_PCT)
+    calories_min = goal.calories - tolerance
+    calories_max = goal.calories + tolerance
+
+    if calories < calories_min:
+        status, calories_remaining = "below", calories_min - calories
+    elif calories > calories_max:
+        status, calories_remaining = "over", 0
+    else:
+        status, calories_remaining = "met", 0
+
+    return {
+        "calories": calories,
+        "calories_goal": goal.calories,
+        "calories_min": calories_min,
+        "calories_max": calories_max,
+        "calories_remaining": calories_remaining,
+        "status": status,
+    }

@@ -39,7 +39,7 @@ from db import (
 from ai.gemini import GeminiUnavailableError
 from ai.services.food_analyzer import analyze_food_photo
 from services.storage import upload_food_photo, get_photo_url, delete_food_photo
-from services.streaks import credit_today_if_goal_met
+from services.streaks import sync_today_credit_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/food", tags=["food"])
@@ -48,7 +48,13 @@ router = APIRouter(prefix="/api/food", tags=["food"])
 
 MAX_ANALYZE_PER_MINUTE = 5
 MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
-ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+ALLOWED_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+}
 MAX_NOTES_LENGTH = 300
 
 # Паттерн валидного photo_key: food/{user_id}/{uuid}.{ext}
@@ -86,10 +92,11 @@ class BarcodeLogIn(BaseModel):
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
-async def _maybe_credit_streak(user: User, log_date: date) -> None:
+async def _maybe_sync_streak(user: User, log_date: date) -> None:
     """
-    Побочный эффект записи еды: продлевает стрик, если log_date — сегодня
-    в локальном времени пользователя и калории попали в норму.
+    Побочный эффект любого изменения FoodLog за сегодня (создание или удаление).
+    sync_today_credit_state сама разберётся, нужно ли начислить, снять или
+    оставить всё как есть — вызывать одну функцию безопасно в обоих случаях.
     """
     profile = await UserProfile.get_or_none(user_id=user.telegram_id)
     if not profile:
@@ -97,7 +104,7 @@ async def _maybe_credit_streak(user: User, log_date: date) -> None:
     goal = await DailyGoal.get_or_none(user_id=user.telegram_id)
     if not goal:
         return
-    await credit_today_if_goal_met(user, goal, profile.timezone, log_date)
+    await sync_today_credit_state(user, goal, profile.timezone, log_date)
 
 
 async def _maybe_log_water(user: User, log_date: date, water_ml: Optional[int]) -> None:
@@ -163,7 +170,7 @@ async def _create_log_with_items(
     # Побочные эффекты, не основная функция эндпоинта — баг здесь не должен
     # ронять сохранение еды.
     try:
-        await _maybe_credit_streak(user, log_date)
+        await _maybe_sync_streak(user, log_date)
     except Exception:
         logger.exception("streak credit failed for user %s", user.telegram_id)
 
@@ -202,7 +209,9 @@ async def analyze_photo(
     user: User = Depends(get_current_user),
 ):
     # ── Rate limiting ──
-    check_rate_limit(user.telegram_id, bucket="analyze", max_per_minute=MAX_ANALYZE_PER_MINUTE)
+    check_rate_limit(
+        user.telegram_id, bucket="analyze", max_per_minute=MAX_ANALYZE_PER_MINUTE
+    )
 
     # ── MIME validation ──
     mime_type = file.content_type or "image/jpeg"
@@ -246,43 +255,45 @@ async def analyze_photo(
 @router.post("/log")
 async def create_log(body: FoodLogIn, user: User = Depends(get_current_user)):
     return await _create_log_with_items(
-        user, body.log_date, body.items, photo_key=body.photo_key, water_ml=body.water_ml
+        user,
+        body.log_date,
+        body.items,
+        photo_key=body.photo_key,
+        water_ml=body.water_ml,
     )
 
 
 @router.get("/{log_date}")
 async def get_logs_by_date(log_date: str, user: User = Depends(get_current_user)):
     d = parse_date(log_date)
-    logs = await FoodLog.filter(
-        user_id=user.telegram_id, log_date=d
-    ).prefetch_related("items")
-
-    photo_urls = await asyncio.gather(
-        *[get_photo_url(log.photo_url) for log in logs]
+    logs = await FoodLog.filter(user_id=user.telegram_id, log_date=d).prefetch_related(
+        "items"
     )
+
+    photo_urls = await asyncio.gather(*[get_photo_url(log.photo_url) for log in logs])
 
     result = []
     for log, photo_url in zip(logs, photo_urls):
         log_dict = (await FoodLogSchema.from_tortoise_orm(log)).model_dump()
-        items = await FoodItemSchema.from_queryset(
-            FoodItem.filter(food_log_id=log.id)
+        items = await FoodItemSchema.from_queryset(FoodItem.filter(food_log_id=log.id))
+        result.append(
+            {
+                **log_dict,
+                "photo_url": photo_url,
+                "items": [i.model_dump() for i in items],
+            }
         )
-        result.append({
-            **log_dict,
-            "photo_url": photo_url,
-            "items": [i.model_dump() for i in items],
-        })
 
     return {
         "date": log_date,
         "logs": result,
         "daily_total": {
-            "calories":  sum(l["total_calories"] for l in result),
+            "calories": sum(l["total_calories"] for l in result),
             "protein_g": sum(float(l["total_protein_g"]) for l in result),
-            "fat_g":     sum(float(l["total_fat_g"]) for l in result),
-            "carbs_g":   sum(float(l["total_carbs_g"]) for l in result),
-            "fiber_g":   sum(float(l["total_fiber_g"]) for l in result),
-            "sugar_g":   sum(float(l["total_sugar_g"]) for l in result),
+            "fat_g": sum(float(l["total_fat_g"]) for l in result),
+            "carbs_g": sum(float(l["total_carbs_g"]) for l in result),
+            "fiber_g": sum(float(l["total_fiber_g"]) for l in result),
+            "sugar_g": sum(float(l["total_sugar_g"]) for l in result),
         },
     }
 
@@ -306,7 +317,9 @@ async def delete_orphan_photo(photo_key: str, user: User = Depends(get_current_u
 
     expected_prefix = f"food/{user.telegram_id}/"
     if not photo_key.startswith(expected_prefix):
-        raise HTTPException(status_code=403, detail="Cannot delete another user's photo")
+        raise HTTPException(
+            status_code=403, detail="Cannot delete another user's photo"
+        )
 
     existing = await FoodLog.filter(
         user_id=user.telegram_id, photo_url=photo_key
@@ -330,5 +343,12 @@ async def delete_log(log_id: int, user: User = Depends(get_current_user)):
     if food_log.photo_url:
         await delete_food_photo(food_log.photo_url)
 
+    deleted_log_date = food_log.log_date
     await FoodLog.filter(id=log_id).delete()
+
+    try:
+        await _maybe_sync_streak(user, deleted_log_date)
+    except Exception:
+        logger.exception("streak uncredit failed for user %s", user.telegram_id)
+
     return {"deleted": True}

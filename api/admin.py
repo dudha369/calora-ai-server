@@ -94,9 +94,7 @@ async def dashboard(_: User = Depends(get_admin_user)):
     stuck_onboarding = await OnboardingDraft.all().count()
 
     # Активность сегодня (уникальные юзеры с food_log или water_log)
-    food_active = await FoodLog.filter(log_date=today).values_list(
-        "user_id", flat=True
-    )
+    food_active = await FoodLog.filter(log_date=today).values_list("user_id", flat=True)
     water_active = await WaterLog.filter(log_date=today).values_list(
         "user_id", flat=True
     )
@@ -123,12 +121,8 @@ async def dashboard(_: User = Depends(get_admin_user)):
     dau_trend = []
     for i in range(7):
         d = today - timedelta(days=6 - i)
-        fa = await FoodLog.filter(log_date=d).values_list(
-            "user_id", flat=True
-        )
-        wa = await WaterLog.filter(log_date=d).values_list(
-            "user_id", flat=True
-        )
+        fa = await FoodLog.filter(log_date=d).values_list("user_id", flat=True)
+        wa = await WaterLog.filter(log_date=d).values_list("user_id", flat=True)
         dau_trend.append({"date": d.isoformat(), "dau": len(set(fa) | set(wa))})
 
     # Онбординг воронка (по шагам)
@@ -144,11 +138,9 @@ async def dashboard(_: User = Depends(get_admin_user)):
         "new_month": new_month,
         "completed_onboarding": completed_onboarding,
         "stuck_onboarding": stuck_onboarding,
-        "onboarding_rate": round(
-            completed_onboarding / total_users * 100, 1
-        )
-        if total_users
-        else 0,
+        "onboarding_rate": (
+            round(completed_onboarding / total_users * 100, 1) if total_users else 0
+        ),
         "dau": dau,
         "total_food_logs": total_food_logs,
         "total_photo_scans": total_photo_scans,
@@ -191,9 +183,7 @@ async def list_users(
         if s.isdigit():
             qs = qs.filter(telegram_id=int(s))
         else:
-            qs = qs.filter(
-                Q(full_name__icontains=s) | Q(username__icontains=s)
-            )
+            qs = qs.filter(Q(full_name__icontains=s) | Q(username__icontains=s))
 
     # Фильтры
     if filter == "onboarded":
@@ -204,12 +194,8 @@ async def list_users(
         qs = qs.filter(telegram_id__in=stuck_ids)
     elif filter == "active_today":
         today = datetime.now(timezone.utc).date()
-        fa = await FoodLog.filter(log_date=today).values_list(
-            "user_id", flat=True
-        )
-        wa = await WaterLog.filter(log_date=today).values_list(
-            "user_id", flat=True
-        )
+        fa = await FoodLog.filter(log_date=today).values_list("user_id", flat=True)
+        wa = await WaterLog.filter(log_date=today).values_list("user_id", flat=True)
         active_ids = set(fa) | set(wa)
         qs = qs.filter(telegram_id__in=list(active_ids))
 
@@ -219,24 +205,24 @@ async def list_users(
 
     # Enrich
     whitelist_ids = _get_whitelist_ids()
-    onboarded_ids_set = set(
-        await UserProfile.all().values_list("user_id", flat=True)
-    )
+    onboarded_ids_set = set(await UserProfile.all().values_list("user_id", flat=True))
 
     result = []
     for u in users:
-        result.append({
-            "telegram_id": u.telegram_id,
-            "full_name": u.full_name,
-            "username": u.username,
-            "language_code": u.language_code,
-            "current_streak": u.current_streak,
-            "max_streak": u.max_streak,
-            "quests_completed": u.quests_completed,
-            "created_at": u.created_at.isoformat(),
-            "onboarded": u.telegram_id in onboarded_ids_set,
-            "in_whitelist": u.telegram_id in whitelist_ids,
-        })
+        result.append(
+            {
+                "telegram_id": u.telegram_id,
+                "full_name": u.full_name,
+                "username": u.username,
+                "language_code": u.language_code,
+                "current_streak": u.current_streak,
+                "max_streak": u.max_streak,
+                "quests_completed": u.quests_completed,
+                "created_at": u.created_at.isoformat(),
+                "onboarded": u.telegram_id in onboarded_ids_set,
+                "in_whitelist": u.telegram_id in whitelist_ids,
+            }
+        )
 
     return {
         "users": result,
@@ -265,9 +251,7 @@ async def get_user_detail(
 
     goal = await DailyGoal.get_or_none(user_id=user_id)
     goal_data = (
-        (await DailyGoalSchema.from_tortoise_orm(goal)).model_dump()
-        if goal
-        else None
+        (await DailyGoalSchema.from_tortoise_orm(goal)).model_dump() if goal else None
     )
 
     # Тот же контракт, что у /api/users/me — иначе админка показывает
@@ -283,23 +267,25 @@ async def get_user_detail(
     food_data = []
     for fl in food_logs:
         items = await FoodItem.filter(food_log_id=fl.id).all()
-        food_data.append({
-            "id": fl.id,
-            "log_date": fl.log_date.isoformat(),
-            "photo_url": fl.photo_url,
-            "total_calories": fl.total_calories,
-            "total_protein_g": float(fl.total_protein_g),
-            "total_fat_g": float(fl.total_fat_g),
-            "total_carbs_g": float(fl.total_carbs_g),
-            "items": [
-                {
-                    "food_name": item.food_name,
-                    "portion_g": float(item.portion_g),
-                    "calories": item.calories,
-                }
-                for item in items
-            ],
-        })
+        food_data.append(
+            {
+                "id": fl.id,
+                "log_date": fl.log_date.isoformat(),
+                "photo_url": fl.photo_url,
+                "total_calories": fl.total_calories,
+                "total_protein_g": float(fl.total_protein_g),
+                "total_fat_g": float(fl.total_fat_g),
+                "total_carbs_g": float(fl.total_carbs_g),
+                "items": [
+                    {
+                        "food_name": item.food_name,
+                        "portion_g": float(item.portion_g),
+                        "calories": item.calories,
+                    }
+                    for item in items
+                ],
+            }
+        )
 
     # Квесты
     quests = await Quest.filter(user_id=user_id).order_by("-expires_at").limit(5)
@@ -375,8 +361,12 @@ async def get_settings(_: User = Depends(get_admin_user)):
         "settings": {
             "whitelist_enabled": str(config.WHITELIST_ENABLED).lower(),
             "whitelist_ids": config.WHITELIST_IDS,
-            "maintenance_mode": await AppSettings.get_value("maintenance_mode", "false"),
-            "registration_enabled": await AppSettings.get_value("registration_enabled", "true"),
+            "maintenance_mode": await AppSettings.get_value(
+                "maintenance_mode", "false"
+            ),
+            "registration_enabled": await AppSettings.get_value(
+                "registration_enabled", "true"
+            ),
         }
     }
 
@@ -424,7 +414,12 @@ async def get_whitelist(_: User = Depends(get_admin_user)):
     result = []
 
     for tid in sorted(ids):
-        entry: dict = {"telegram_id": tid, "full_name": None, "username": None, "in_db": False}
+        entry: dict = {
+            "telegram_id": tid,
+            "full_name": None,
+            "username": None,
+            "in_db": False,
+        }
         # Пробуем найти в БД
         user = await User.get_or_none(telegram_id=tid)
         if user:
@@ -475,11 +470,15 @@ async def get_user_avatar(user_id: int, _: User = Depends(get_admin_user)):
     except TelegramBadRequest as e:
         # Спокойно обрабатываем ошибку Телеграма (юзер не найден, доступ запрещен и т.д.)
         logger.info(f"Telegram peer handling for user {user_id}: {e.message}")
-        raise HTTPException(status_code=404, detail="Avatar not available via Telegram API")
+        raise HTTPException(
+            status_code=404, detail="Avatar not available via Telegram API"
+        )
 
     except Exception as e:
         # А вот тут ловим реальные непредвиденные падения (например, упала сеть)
-        logger.error(f"Unexpected error fetching avatar for user {user_id}: {e}", exc_info=True)
+        logger.error(
+            f"Unexpected error fetching avatar for user {user_id}: {e}", exc_info=True
+        )
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -536,7 +535,9 @@ async def send_broadcast(
 
     # Запускаем рассылку в фоне
     asyncio.create_task(
-        _do_broadcast(broadcast.id, recipients, body.text, body.button_text, body.button_url)
+        _do_broadcast(
+            broadcast.id, recipients, body.text, body.button_text, body.button_url
+        )
     )
 
     return {
@@ -585,26 +586,24 @@ async def _get_broadcast_recipients(segment: str) -> list[int]:
 
     elif segment == "inactive":
         week_ago = today - timedelta(days=7)
-        active_fa = await FoodLog.filter(
-            log_date__gte=week_ago
-        ).values_list("user_id", flat=True)
-        active_wa = await WaterLog.filter(
-            log_date__gte=week_ago
-        ).values_list("user_id", flat=True)
+        active_fa = await FoodLog.filter(log_date__gte=week_ago).values_list(
+            "user_id", flat=True
+        )
+        active_wa = await WaterLog.filter(log_date__gte=week_ago).values_list(
+            "user_id", flat=True
+        )
         active = set(active_fa) | set(active_wa)
         all_ids = set(await User.all().values_list("telegram_id", flat=True))
         return list(all_ids - active)
 
     elif segment == "new":
         three_days_ago = today - timedelta(days=3)
-        return await User.filter(
-            created_at__gte=three_days_ago
-        ).values_list("telegram_id", flat=True)
+        return await User.filter(created_at__gte=three_days_ago).values_list(
+            "telegram_id", flat=True
+        )
 
     elif segment == "not_onboarded":
-        onboarded = set(
-            await UserProfile.all().values_list("user_id", flat=True)
-        )
+        onboarded = set(await UserProfile.all().values_list("user_id", flat=True))
         all_ids = set(await User.all().values_list("telegram_id", flat=True))
         return list(all_ids - onboarded)
 
@@ -627,9 +626,7 @@ async def _do_broadcast(
     reply_markup = None
     if button_text and button_url:
         reply_markup = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=button_text, url=button_url)]
-            ]
+            inline_keyboard=[[InlineKeyboardButton(text=button_text, url=button_url)]]
         )
 
     for uid in recipients:

@@ -39,7 +39,9 @@ async def get_today_tip(user: User = Depends(get_current_user)):
         }
 
     # Rate limit только перед вызовом Gemini (кешированные ответы не лимитируем)
-    check_rate_limit(user.telegram_id, bucket="tips", max_per_minute=MAX_TIPS_PER_MINUTE)
+    check_rate_limit(
+        user.telegram_id, bucket="tips", max_per_minute=MAX_TIPS_PER_MINUTE
+    )
 
     goal = await DailyGoal.get_or_none(user_id=user.telegram_id)
     goals = {
@@ -83,9 +85,6 @@ async def get_recent_tips(
 ):
     """Последние советы с пагинацией."""
     tips = (
-        await AiTip.filter(user_id=user.telegram_id)
-        .offset(offset)
-        .limit(limit)
-        .all()
+        await AiTip.filter(user_id=user.telegram_id).offset(offset).limit(limit).all()
     )
     return [(await AiTipSchema.from_tortoise_orm(t)).model_dump() for t in tips]

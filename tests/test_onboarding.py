@@ -19,10 +19,13 @@ async def test_onboarding_progress_empty(client: AsyncClient):
 async def test_save_step(client: AsyncClient):
     """POST /api/onboarding/step saves draft data."""
     # Step 1: gender
-    resp = await client.post("/api/onboarding/step", json={
-        "step": 2,
-        "gender": "male",
-    })
+    resp = await client.post(
+        "/api/onboarding/step",
+        json={
+            "step": 2,
+            "gender": "male",
+        },
+    )
     assert resp.status_code == 200
 
     # Verify via progress
@@ -36,7 +39,9 @@ async def test_save_step(client: AsyncClient):
 async def test_save_multiple_steps(client: AsyncClient):
     """Multiple step saves accumulate data in the draft."""
     await client.post("/api/onboarding/step", json={"step": 2, "gender": "female"})
-    await client.post("/api/onboarding/step", json={"step": 3, "birth_date": "1996-06-12"})
+    await client.post(
+        "/api/onboarding/step", json={"step": 3, "birth_date": "1996-06-12"}
+    )
     await client.post("/api/onboarding/step", json={"step": 4, "height": 165})
 
     resp = await client.get("/api/onboarding/progress")
@@ -73,24 +78,35 @@ async def test_complete_onboarding_success(mock_recalc, client: AsyncClient):
 
     # Save all required steps
     await client.post("/api/onboarding/step", json={"step": 2, "gender": "male"})
-    await client.post("/api/onboarding/step", json={"step": 3, "birth_date": "2001-06-12"})
+    await client.post(
+        "/api/onboarding/step", json={"step": 3, "birth_date": "2001-06-12"}
+    )
     await client.post("/api/onboarding/step", json={"step": 4, "height": 180})
     await client.post("/api/onboarding/step", json={"step": 5, "weight": 80.0})
     await client.post("/api/onboarding/step", json={"step": 6, "goal": "lose"})
     await client.post("/api/onboarding/step", json={"step": 7, "target_weight": 75.0})
     await client.post("/api/onboarding/step", json={"step": 8, "activity_level": 1.55})
-    await client.post("/api/onboarding/step", json={
-        "step": 9,
-        "dietary_restrictions": [],
-    })
-    await client.post("/api/onboarding/step", json={
-        "step": 10,
-        "water_track": "auto",
-    })
-    await client.post("/api/onboarding/step", json={
-        "step": 11,
-        "medical_conditions": [],
-    })
+    await client.post(
+        "/api/onboarding/step",
+        json={
+            "step": 9,
+            "dietary_restrictions": [],
+        },
+    )
+    await client.post(
+        "/api/onboarding/step",
+        json={
+            "step": 10,
+            "water_track": "auto",
+        },
+    )
+    await client.post(
+        "/api/onboarding/step",
+        json={
+            "step": 11,
+            "medical_conditions": [],
+        },
+    )
 
     # Mock will raise to trigger the fallback path
     mock_recalc.side_effect = Exception("AI unavailable")

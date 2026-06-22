@@ -20,13 +20,12 @@ async def cmd_start(message: Message) -> None:
 
     is_new = await _save_user(message)
 
-    in_whitelist = (
-        not config.WHITELIST_ENABLED
-        or user.id in config.whitelist_ids
-    )
+    in_whitelist = not config.WHITELIST_ENABLED or user.id in config.whitelist_ids
 
     if is_new and config.ADMIN_TELEGRAM_ID:
-        asyncio.create_task(_notify_admin(user.id, user.first_name, user.username, in_whitelist))
+        asyncio.create_task(
+            _notify_admin(user.id, user.first_name, user.username, in_whitelist)
+        )
 
     if not in_whitelist:
         await message.answer(

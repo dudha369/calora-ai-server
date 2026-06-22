@@ -76,11 +76,17 @@ async def _with_retry(coro_factory, *, operation: str):
             delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
             logger.warning(
                 "Gemini %s unavailable (attempt %d/%d), retrying in %.1fs: %s",
-                operation, attempt, MAX_RETRIES, delay, exc,
+                operation,
+                attempt,
+                MAX_RETRIES,
+                delay,
+                exc,
             )
             await asyncio.sleep(delay)
 
-    logger.error("Gemini %s failed after %d attempts: %s", operation, MAX_RETRIES, last_exc)
+    logger.error(
+        "Gemini %s failed after %d attempts: %s", operation, MAX_RETRIES, last_exc
+    )
     raise GeminiUnavailableError(
         "Gemini is temporarily unavailable due to high demand. Please try again later."
     ) from last_exc
@@ -94,7 +100,7 @@ def _parse_json(text: str) -> dict:
 
     if "<think>" in text:
         end = text.find("</think>")
-        text = text[end + 8:].strip() if end != -1 else text
+        text = text[end + 8 :].strip() if end != -1 else text
 
     try:
         return json.loads(text)

@@ -36,11 +36,22 @@ async def test_daily_stats_with_data(client: AsyncClient, seeded_user):
     """GET /api/stats/daily aggregates food and water."""
     d = "2026-06-12"
     # Add food
-    await client.post("/api/food/log", json={
-        "log_date": d,
-        "items": [{"food_name": "Тест", "portion_g": 100, "calories": 300,
-                    "protein_g": 20, "fat_g": 10, "carbs_g": 30}],
-    })
+    await client.post(
+        "/api/food/log",
+        json={
+            "log_date": d,
+            "items": [
+                {
+                    "food_name": "Тест",
+                    "portion_g": 100,
+                    "calories": 300,
+                    "protein_g": 20,
+                    "fat_g": 10,
+                    "carbs_g": 30,
+                }
+            ],
+        },
+    )
     # Add water
     await client.post("/api/water", json={"log_date": d, "amount_ml": 500})
 
@@ -65,19 +76,38 @@ async def test_daily_stats_no_goals(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_active_dates(client: AsyncClient, seeded_user):
     """GET /api/stats/active-dates returns dates with has_food/has_water flags."""
-    await client.post("/api/food/log", json={
-        "log_date": "2026-06-10",
-        "items": [{"food_name": "A", "portion_g": 100, "calories": 100,
-                    "protein_g": 5, "fat_g": 3, "carbs_g": 10}],
-    })
+    await client.post(
+        "/api/food/log",
+        json={
+            "log_date": "2026-06-10",
+            "items": [
+                {
+                    "food_name": "A",
+                    "portion_g": 100,
+                    "calories": 100,
+                    "protein_g": 5,
+                    "fat_g": 3,
+                    "carbs_g": 10,
+                }
+            ],
+        },
+    )
     await client.post("/api/water", json={"log_date": "2026-06-12", "amount_ml": 250})
 
     resp = await client.get("/api/stats/active-dates?from=2026-06-01&to=2026-06-30")
     assert resp.status_code == 200
     by_date = {e["date"]: e for e in resp.json()["dates"]}
 
-    assert by_date["2026-06-10"] == {"date": "2026-06-10", "has_food": True, "has_water": False}
-    assert by_date["2026-06-12"] == {"date": "2026-06-12", "has_food": False, "has_water": True}
+    assert by_date["2026-06-10"] == {
+        "date": "2026-06-10",
+        "has_food": True,
+        "has_water": False,
+    }
+    assert by_date["2026-06-12"] == {
+        "date": "2026-06-12",
+        "has_food": False,
+        "has_water": True,
+    }
     assert "2026-06-11" not in by_date
 
 

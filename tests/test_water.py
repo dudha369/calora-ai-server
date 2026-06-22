@@ -7,10 +7,13 @@ from httpx import AsyncClient
 @pytest.mark.asyncio
 async def test_add_water(client: AsyncClient, seeded_user):
     """POST /api/water creates a water log."""
-    resp = await client.post("/api/water", json={
-        "log_date": "2026-06-12",
-        "amount_ml": 250,
-    })
+    resp = await client.post(
+        "/api/water",
+        json={
+            "log_date": "2026-06-12",
+            "amount_ml": 250,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["amount_ml"] == 250
@@ -19,10 +22,13 @@ async def test_add_water(client: AsyncClient, seeded_user):
 @pytest.mark.asyncio
 async def test_add_water_invalid_date(client: AsyncClient, seeded_user):
     """POST /api/water returns 422 for invalid date."""
-    resp = await client.post("/api/water", json={
-        "log_date": "garbage",
-        "amount_ml": 250,
-    })
+    resp = await client.post(
+        "/api/water",
+        json={
+            "log_date": "garbage",
+            "amount_ml": 250,
+        },
+    )
     assert resp.status_code == 422
     assert "Invalid date" in resp.json()["detail"]
 
@@ -62,10 +68,13 @@ async def test_get_water_empty_date(client: AsyncClient, seeded_user):
 @pytest.mark.asyncio
 async def test_delete_water(client: AsyncClient, seeded_user):
     """DELETE /api/water/{log_id} removes the log."""
-    resp = await client.post("/api/water", json={
-        "log_date": "2026-06-12",
-        "amount_ml": 300,
-    })
+    resp = await client.post(
+        "/api/water",
+        json={
+            "log_date": "2026-06-12",
+            "amount_ml": 300,
+        },
+    )
     log_id = resp.json()["id"]
 
     resp = await client.delete(f"/api/water/{log_id}")

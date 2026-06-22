@@ -22,7 +22,9 @@ async def test_today_tip_no_food(client: AsyncClient, seeded_user):
 
 @pytest.mark.asyncio
 @patch("api.tips.generate_daily_tip", new_callable=AsyncMock)
-async def test_today_tip_generates(mock_gen, client: AsyncClient, seeded_user_with_food):
+async def test_today_tip_generates(
+    mock_gen, client: AsyncClient, seeded_user_with_food
+):
     """GET /api/tips/today generates a tip when food exists."""
     mock_gen.return_value = {
         "tip": "Отличный баланс белков сегодня!",

@@ -50,6 +50,7 @@ TORTOISE_TEST_CONFIG = {
 
 # ── Event loop ───────────────────────────────────────────────────────────────
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Single event loop for the whole test session."""
@@ -59,6 +60,7 @@ def event_loop():
 
 
 # ── Database lifecycle ───────────────────────────────────────────────────────
+
 
 @pytest_asyncio.fixture(autouse=True)
 async def init_db():
@@ -79,6 +81,7 @@ FAKE_TG_USERNAME = "testuser"
 
 class FakeWebAppUser:
     """Minimal stub that satisfies auth() expectations."""
+
     id = FAKE_TG_USER_ID
     first_name = FAKE_TG_FIRST_NAME
     username = FAKE_TG_USERNAME
@@ -140,6 +143,7 @@ async def client():
 
 
 # ── Helper: seed a complete user (profile + goals) ──────────────────────────
+
 
 @pytest_asyncio.fixture
 async def seeded_user(client: AsyncClient):

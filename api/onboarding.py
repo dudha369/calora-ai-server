@@ -181,14 +181,16 @@ async def complete_onboarding(user: User = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"AI goal calculation failed for user {user.telegram_id}: {e}")
         # Fallback: Mifflin-St Jeor без AI
-        goals = calculate_base_goals({
-            "gender": profile.gender,
-            "birth_date": profile.birth_date,
-            "height_cm": profile.height_cm,
-            "weight_kg": float(profile.weight_kg),
-            "goal_type": profile.goal_type,
-            "activity_level": profile.activity_level,
-        })
+        goals = calculate_base_goals(
+            {
+                "gender": profile.gender,
+                "birth_date": profile.birth_date,
+                "height_cm": profile.height_cm,
+                "weight_kg": float(profile.weight_kg),
+                "goal_type": profile.goal_type,
+                "activity_level": profile.activity_level,
+            }
+        )
         goal, _ = await DailyGoal.get_or_create(
             user_id=user.telegram_id,
             defaults={**goals, "ai_tip": None},

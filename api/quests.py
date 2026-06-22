@@ -35,12 +35,12 @@ async def generate_quests(user: User = Depends(get_current_user)):
 
     Защита от дубликатов: если уже есть >= MAX_ACTIVE_QUESTS активных — 409.
     """
-    check_rate_limit(user.telegram_id, bucket="quests", max_per_minute=MAX_GENERATE_PER_MINUTE)
+    check_rate_limit(
+        user.telegram_id, bucket="quests", max_per_minute=MAX_GENERATE_PER_MINUTE
+    )
 
     # Проверяем количество активных квестов
-    active_count = await Quest.filter(
-        user_id=user.telegram_id, status="active"
-    ).count()
+    active_count = await Quest.filter(user_id=user.telegram_id, status="active").count()
     if active_count >= MAX_ACTIVE_QUESTS:
         raise HTTPException(
             status_code=409,

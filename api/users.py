@@ -19,7 +19,11 @@ from db import (
     FoodLog,
 )
 from services.storage import delete_food_photos
-from services.streaks import reconcile_streak
+from services.streaks import (
+    reconcile_streak,
+    is_streak_active_today,
+    get_today_progress,
+)
 
 from config import config
 
@@ -61,6 +65,9 @@ async def get_me(user: User = Depends(get_current_user)):
             logger.exception("streak reconcile failed for user %s", user.telegram_id)
 
     user_data = (await UserSchema.from_tortoise_orm(user)).model_dump()
+    user_data["streak_active_today"] = (
+        is_streak_active_today(user, profile.timezone) if profile else False
+    )
 
     return {
         "user": user_data,
@@ -71,12 +78,43 @@ async def get_me(user: User = Depends(get_current_user)):
     }
 
 
+@router.get("/streak")
+async def get_streak(user: User = Depends(get_current_user)):
+    """
+    GET /api/users/streak — данные для попапа серии на HomePage.
+    Отдельный эндпоинт, а не часть /me, потому что вызывается только
+    по тапу на огонёк — не нужно тащить это при каждом открытии приложения.
+    """
+    profile = await UserProfile.get_or_none(user_id=user.telegram_id)
+    goal = await DailyGoal.get_or_none(user_id=user.telegram_id)
+
+    if not profile or not goal:
+        return {
+            "current_streak": user.current_streak,
+            "max_streak": user.max_streak,
+            "streak_active_today": False,
+            "today_progress": None,
+        }
+
+    # Ленивая проверка обрыва — та же что в /me, чтобы данные были свежие
+    try:
+        await reconcile_streak(user, profile.timezone, goal)
+    except Exception:
+        logger.exception("streak reconcile failed for user %s", user.telegram_id)
+
+    today_progress = await get_today_progress(user.telegram_id, profile.timezone, goal)
+
+    return {
+        "current_streak": user.current_streak,
+        "max_streak": user.max_streak,
+        "streak_active_today": is_streak_active_today(user, profile.timezone),
+        "today_progress": today_progress,
+    }
+
+
 @router.delete("/me")
 async def delete_account(user: User = Depends(get_current_user)):
-    is_admin = (
-        config.ADMIN_TELEGRAM_ID
-        and user.telegram_id == config.ADMIN_TELEGRAM_ID
-    )
+    is_admin = config.ADMIN_TELEGRAM_ID and user.telegram_id == config.ADMIN_TELEGRAM_ID
 
     if is_admin:
         await UserProfile.filter(user_id=user.telegram_id).delete()

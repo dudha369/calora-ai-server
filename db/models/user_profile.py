@@ -43,7 +43,9 @@ class UserProfile(Model):
     medical_conditions = fields.JSONField(default=list)
 
     timezone = fields.CharField(max_length=40, default="Europe/Kyiv")
-    units_preference = fields.CharField(max_length=10, default="metric")  # metric | imperial
+    units_preference = fields.CharField(
+        max_length=10, default="metric"
+    )  # metric | imperial
     updated_at = fields.DatetimeField(auto_now=True)
 
     class Meta:
