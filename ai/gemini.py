@@ -33,15 +33,15 @@ _RETRY_BASE_DELAY = 1.0
 
 # Бесплатные модели в порядке предпочтения.
 # При rate-limit (429) или удалении (404) → автоматически переходим к следующей
+# Бесплатные модели в порядке предпочтения.
 _VISION_MODELS = [
-    "google/gemini-2.5-flash-preview:free",            # Новая версия Gemini (основная)
-    "meta-llama/llama-3.2-11b-vision-instruct:free",   # Надежная замена от Meta
+    "meta-llama/llama-3.2-11b-vision-instruct:free",  # Надежная бесплатная Vision-модель от Meta
+    "openrouter/free",                                # Умный авто-подбор бесплатной vision-модели
 ]
 
 _TEXT_MODELS = [
-    "google/gemini-2.5-flash-preview:free",
-    "meta-llama/llama-3.3-70b-instruct:free",          # Отличная текстовая модель
-    "deepseek/deepseek-r1:free"                        # Альтернатива для логики
+    "openrouter/free",                                # Автоматический выбор лучшей текстовой модели
+    "meta-llama/llama-3.3-70b-instruct:free",         # Отличный текстовый fallback
 ]
 
 
