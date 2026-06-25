@@ -9,7 +9,8 @@ ROOT_DIR = Path(__file__).parent.absolute()
 class Config(BaseSettings):
     BOT_TOKEN: SecretStr
     DB_URL: SecretStr
-    OPENROUTER_API_KEY: SecretStr
+    GEMINI_API_KEY: SecretStr
+    CLOUDFLARE_WORKER_ENDPOINT: SecretStr
 
     WEBHOOK_URL: SecretStr
     WEBAPP_URL: SecretStr
