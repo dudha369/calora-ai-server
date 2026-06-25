@@ -32,14 +32,16 @@ _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 
 # Бесплатные модели в порядке предпочтения.
-# При rate-limit → автоматически переходим к следующей без задержки.
+# При rate-limit (429) или удалении (404) → автоматически переходим к следующей
 _VISION_MODELS = [
-    "google/gemini-2.0-flash-exp:free",          # лучшее качество, vision
-    "meta-llama/llama-3.2-11b-vision-instruct:free",  # fallback
+    "google/gemini-2.5-flash-preview:free",            # Новая версия Gemini (основная)
+    "meta-llama/llama-3.2-11b-vision-instruct:free",   # Надежная замена от Meta
 ]
+
 _TEXT_MODELS = [
-    "google/gemini-2.0-flash-exp:free",
-    "meta-llama/llama-3.1-8b-instruct:free",     # fallback
+    "google/gemini-2.5-flash-preview:free",
+    "meta-llama/llama-3.3-70b-instruct:free",          # Отличная текстовая модель
+    "deepseek/deepseek-r1:free"                        # Альтернатива для логики
 ]
 
 
@@ -63,6 +65,9 @@ class _Retryable(Exception):
     def __init__(self, status: int, detail: str = "") -> None:
         self.status = status
         self.detail = detail
+
+class _SkipToNextModel(Exception):
+    """Исключение для немедленного перехода к следующей модели."""
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -146,9 +151,9 @@ async def _call_once(
         content = resp.json()["choices"][0]["message"]["content"]
         return _parse_json(content)
 
-    if resp.status_code == 429:
-        logger.info("OpenRouter: %s rate-limited", model)
-        raise _RateLimited()
+    if resp.status_code in (429, 404, 403):
+        logger.info("OpenRouter: %s недоступна (статус %d), переключаюсь...", model, resp.status_code)
+        raise _SkipToNextModel()
 
     if resp.status_code in (500, 502, 503, 504):
         logger.warning("OpenRouter: %s → %d: %s", model, resp.status_code, resp.text[:100])
@@ -181,6 +186,9 @@ async def _request(
                     return await _call_once(
                         client, model, messages, temperature, max_tokens
                     )
+
+                except _SkipToNextModel:
+                    continue  # Продолжаем цикл, пробуем следующую модель
 
                 except _RateLimited:
                     break  # немедленно к следующей модели, без задержки
