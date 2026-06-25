@@ -9,7 +9,7 @@ ROOT_DIR = Path(__file__).parent.absolute()
 class Config(BaseSettings):
     BOT_TOKEN: SecretStr
     DB_URL: SecretStr
-    GEMINI_API_KEY: SecretStr
+    OPENROUTER_API_KEY: SecretStr
 
     WEBHOOK_URL: SecretStr
     WEBAPP_URL: SecretStr

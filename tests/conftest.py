@@ -23,7 +23,7 @@ os.environ.setdefault("BOT_TOKEN", "0000000000:AAFakeTokenForTesting")
 os.environ.setdefault("DB_URL", "sqlite://:memory:")
 os.environ.setdefault("WEBHOOK_URL", "https://test.example.com")
 os.environ.setdefault("WEBAPP_URL", "https://test.example.com")
-os.environ.setdefault("GEMINI_API_KEY", "fake-key")
+os.environ.setdefault("OPENROUTER_API_KEY", "fake-key")
 
 # ── Tortoise test config (SQLite in-memory) ─────────────────────────────────
 
