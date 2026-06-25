@@ -6,12 +6,11 @@ from tortoise.contrib.pydantic import pydantic_model_creator
 class FoodItem(Model):
     """
     Отдельное блюдо/продукт внутри FoodLog.
-    ИИ может найти несколько блюд на одном фото — каждое отдельной записью.
-    После добавления/удаления → пересчитывай total_* в родительском FoodLog.
 
-    fiber_g / sugar_g — важные микронутриенты:
-    - fiber для здоровья пищеварения и контроля веса
-    - sugar критичен для пользователей с диабетом (medical_conditions)
+    water_ml — вода/гидратация от этого конкретного блюда/напитка
+               (заполняется AI-анализом). Хранится здесь, чтобы при
+               повторении записи (repeat) можно было восстановить
+               полную картину без дополнительных запросов.
     """
 
     food_log = fields.ForeignKeyField(
@@ -26,6 +25,7 @@ class FoodItem(Model):
     carbs_g = fields.DecimalField(max_digits=5, decimal_places=1)
     fiber_g = fields.DecimalField(max_digits=5, decimal_places=1, default=0)
     sugar_g = fields.DecimalField(max_digits=5, decimal_places=1, default=0)
+    water_ml = fields.SmallIntField(default=0)
 
     class Meta:
         table = "food_items"

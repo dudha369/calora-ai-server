@@ -73,6 +73,7 @@ class FoodItemIn(BaseModel):
     carbs_g: float
     fiber_g: float = 0.0
     sugar_g: float = 0.0
+    water_ml: int = 0  # ← NEW: per-dish hydration, default 0 для обратной совместимости
 
 
 class FoodLogIn(BaseModel):
@@ -107,22 +108,6 @@ async def _maybe_sync_streak(user: User, log_date: date) -> None:
     await sync_today_credit_state(user, goal, profile.timezone, log_date)
 
 
-async def _maybe_log_water(user: User, log_date: date, water_ml: Optional[int]) -> None:
-    """
-    Побочный эффект записи еды: если ИИ нашёл воду/напитки на фото, создаёт
-    запись в WaterLog для той же даты. Best-effort, как и _maybe_credit_streak —
-    ошибка здесь не должна ронять сохранение самой еды.
-    """
-    if not water_ml or water_ml <= 0:
-        return
-    try:
-        await WaterLog.create(
-            user_id=user.telegram_id, log_date=log_date, amount_ml=water_ml
-        )
-    except Exception:
-        logger.exception("auto water log failed for user %s", user.telegram_id)
-
-
 async def _recalc_totals(food_log: FoodLog) -> None:
     items = await FoodItem.filter(food_log_id=food_log.id).all()
     await FoodLog.filter(id=food_log.id).update(
@@ -135,6 +120,29 @@ async def _recalc_totals(food_log: FoodLog) -> None:
     )
 
 
+async def _maybe_log_water(
+    user: User,
+    log_date: date,
+    water_ml: int,
+    food_log_id: int,  # ← NEW: обязательный, чтобы всегда создавать связь
+) -> None:
+    """
+    Создаёт WaterLog привязанный к FoodLog.
+    food_log_id позволяет удалить эту запись вместе с едой.
+    """
+    if water_ml <= 0:
+        return
+    try:
+        await WaterLog.create(
+            user_id=user.telegram_id,
+            log_date=log_date,
+            amount_ml=water_ml,
+            food_log_id=food_log_id,  # ← NEW
+        )
+    except Exception:
+        logger.exception("auto water log failed for user %s", user.telegram_id)
+
+
 async def _create_log_with_items(
     user: User,
     body_log_date: str,
@@ -142,7 +150,13 @@ async def _create_log_with_items(
     photo_key: Optional[str] = None,
     water_ml: Optional[int] = None,
 ) -> dict:
-    """Общая логика создания FoodLog + FoodItems для /log и /log-barcode."""
+    """
+    Общая логика создания FoodLog + FoodItems для /log и /log-barcode.
+
+    water_ml приоритет:
+      1. Явный параметр (backward-compat для scanner-флоу)
+      2. Сумма item.water_ml (новый путь — repeat, или scanner с per-item water)
+    """
     log_date = parse_date(body_log_date)
 
     food_log = await FoodLog.create(
@@ -162,19 +176,24 @@ async def _create_log_with_items(
             carbs_g=Decimal(str(item.carbs_g)),
             fiber_g=Decimal(str(item.fiber_g)),
             sugar_g=Decimal(str(item.sugar_g)),
+            water_ml=item.water_ml,  # ← NEW: сохраняем для будущего repeat
         )
 
     await _recalc_totals(food_log)
     await food_log.refresh_from_db()
 
-    # Побочные эффекты, не основная функция эндпоинта — баг здесь не должен
-    # ронять сохранение еды.
+    # Приоритет: явный параметр > сумма по блюдам
+    effective_water_ml = (
+        water_ml if water_ml is not None
+        else sum(item.water_ml for item in body_items)
+    )
+
     try:
         await _maybe_sync_streak(user, log_date)
     except Exception:
         logger.exception("streak credit failed for user %s", user.telegram_id)
 
-    await _maybe_log_water(user, log_date, water_ml)
+    await _maybe_log_water(user, log_date, effective_water_ml, food_log_id=food_log.id)
 
     items_data = await FoodItemSchema.from_queryset(
         FoodItem.filter(food_log_id=food_log.id)
@@ -342,6 +361,10 @@ async def delete_log(log_id: int, user: User = Depends(get_current_user)):
 
     if food_log.photo_url:
         await delete_food_photo(food_log.photo_url)
+
+    # Удаляем автоматически созданные записи воды, привязанные к этой еде.
+    # Ручные записи (food_log_id=NULL) остаются нетронутыми.
+    await WaterLog.filter(food_log_id=log_id, user_id=user.telegram_id).delete()
 
     deleted_log_date = food_log.log_date
     await FoodLog.filter(id=log_id).delete()
