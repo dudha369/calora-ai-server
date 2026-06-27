@@ -5,7 +5,7 @@ DELETE /api/users/me — полное удаление аккаунта (нео�
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from .utils import get_current_user
 from db import (
@@ -23,6 +23,7 @@ from services.streaks import (
     reconcile_streak,
     is_streak_active_today,
     get_today_progress,
+    restore_streak,
 )
 
 from config import config
@@ -82,8 +83,8 @@ async def get_me(user: User = Depends(get_current_user)):
 async def get_streak(user: User = Depends(get_current_user)):
     """
     GET /api/users/streak — данные для попапа серии на HomePage.
-    Отдельный эндпоинт, а не часть /me, потому что вызывается только
-    по тапу на огонёк — не нужно тащить это при каждом открытии приложения.
+    Отдельный эндпоинт, а не часть /me: вызывается только по тапу
+    на огонёк, не нужно тащить при каждом открытии приложения.
     """
     profile = await UserProfile.get_or_none(user_id=user.telegram_id)
     goal = await DailyGoal.get_or_none(user_id=user.telegram_id)
@@ -93,23 +94,55 @@ async def get_streak(user: User = Depends(get_current_user)):
             "current_streak": user.current_streak,
             "max_streak": user.max_streak,
             "streak_active_today": False,
+            "streak_restores_available": user.streak_restores_available,
+            "can_restore": False,
             "today_progress": None,
         }
 
-    # Ленивая проверка обрыва — та же что в /me, чтобы данные были свежие
     try:
         await reconcile_streak(user, profile.timezone, goal)
     except Exception:
         logger.exception("streak reconcile failed for user %s", user.telegram_id)
 
-    today_progress = await get_today_progress(user.telegram_id, profile.timezone, goal)
+    today_progress = await get_today_progress(
+        user.telegram_id, profile.timezone, goal
+    )
 
     return {
         "current_streak": user.current_streak,
         "max_streak": user.max_streak,
         "streak_active_today": is_streak_active_today(user, profile.timezone),
+        "streak_restores_available": user.streak_restores_available,
+        # can_restore вычисляется сервером — клиент не видит streak_before_break
+        "can_restore": (
+            user.streak_before_break is not None
+            and user.streak_restores_available > 0
+        ),
         "today_progress": today_progress,
     }
+
+
+@router.post("/streak/restore")
+async def restore_user_streak(user: User = Depends(get_current_user)):
+    """
+    POST /api/users/streak/restore — ручное восстановление серии.
+    400 — нечего восстанавливать (streak_before_break is None).
+    409 — нет зарядов (streak_restores_available == 0).
+    """
+    profile = await UserProfile.get_or_none(user_id=user.telegram_id)
+    if not profile:
+        raise HTTPException(
+            status_code=400,
+            detail="Profile not found. Complete onboarding first.",
+        )
+
+    result = await restore_streak(user, profile.timezone)
+
+    if not result["ok"]:
+        code = 409 if result["reason"] == "no_restores_available" else 400
+        raise HTTPException(status_code=code, detail=result["reason"])
+
+    return result
 
 
 @router.delete("/me")
