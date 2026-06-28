@@ -21,7 +21,8 @@ class User(Model):
 
     current_streak = fields.IntField(default=0)
     max_streak = fields.IntField(default=0)
-    streak_restores_available = fields.SmallIntField(default=2)
+    streak_restores_available = fields.SmallIntField(default=3)
+    streak_restores_reset_at = fields.DateField(null=True)
     streak_before_break = fields.IntField(null=True)
 
     quests_completed = fields.IntField(default=0)

@@ -1,32 +1,29 @@
 """
 Логика стрика: продление/откат событием (после лога/удаления еды) +
 ленивое обнаружение обрыва (при чтении данных пользователя) +
-ручное восстановление серии (MAX_RESTORES_PER_STREAK раз за серию).
+ручное восстановление серии.
 
-Жизненный цикл восстановлений:
-  • Новая серия (current_streak: 0 → 1) — заряды сбрасываются в MAX.
-  • Restore использован — заряд списывается (streak_restores_available -= 1).
-  • Серия оборвалась и пользователь начал новую — неиспользованные заряды
-    сгорают и выдаются свежие при первом met-дне. Это "щит текущей серии",
-    а не месячная подписка.
+Жизненный цикл щитов (два независимых триггера сброса):
+  1. Новый месяц → streak_restores_available = MAX_RESTORES_PER_MONTH,
+     независимо от серии. Отслеживается через streak_restores_reset_at.
+  2. Новая серия (current_streak: 0 → 1) → тоже MAX, всегда.
+     Новая серия — чистый старт, щиты не переносятся из прошлой.
 
-Почему per-streak, а не per-month:
-  Per-month требовал дополнительного поля (streak_restores_reset_at) и
-  создавал странную семантику — заряды живут сами по себе независимо от
-  серии. Per-streak честнее для пользователя и проще технически: нет
-  date-tracking, сброс происходит ровно там, где начинается новая серия.
+Примеры:
+  • Использовал 1 щит, серия идёт → 2 щита остаются
+  • Потерял серию (любое кол-во щитов), начал новую → всегда 3 щита
+  • Новый месяц, серия продолжается → всегда 3 щита
+
+Критерий "успешного дня":
+  total_calories за день попадает в ±10% от DailyGoal.calories.
 
 Ключевые поля User:
-  last_streak_check_date    — дата последнего учтённого дня (в tz юзера).
-                              == today → сегодня засчитано.
+  last_streak_check_date    — последняя дата, за которую серия учтена.
   streak_before_break       — значение серии до первого обрыва текущего
-                              эпизода. None → серия активна или эпизод
-                              закрыт (восстановлен / начата новая серия).
-                              Устанавливается только в reconcile.
-  streak_restores_available — остаток зарядов для текущей серии.
-
-MAX_BACKFILL_DAYS — защита от аномальных данных: при last_streak_check_date
-в далёком прошлом пересчёт нецелесообразен, сбрасываем в 0.
+                              эпизода. Устанавливается reconcile, сбрасывается
+                              при restore или начале новой серии.
+  streak_restores_available — остаток щитов.
+  streak_restores_reset_at  — первое число месяца, когда щиты выданы.
 """
 
 import logging
@@ -39,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 CALORIE_TOLERANCE_PCT = 0.10
 MAX_BACKFILL_DAYS = 365
-MAX_RESTORES_PER_STREAK = 2
+MAX_RESTORES_PER_MONTH = 3
 
 
 # ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -47,10 +44,9 @@ MAX_RESTORES_PER_STREAK = 2
 
 def local_today(tz_name: str) -> date:
     """
-    Текущая календарная дата в локальном времени пользователя.
-
-    Публичная (без подчёркивания): patch("services.streaks.local_today", ...)
-    в тестах подменяет дату для всех функций модуля сразу.
+    Текущая дата в локальном времени пользователя.
+    Публичная: patch("services.streaks.local_today", ...) в тестах
+    подменяет дату для всех функций модуля сразу.
     """
     try:
         tz = ZoneInfo(tz_name)
@@ -60,8 +56,22 @@ def local_today(tz_name: str) -> date:
     return datetime.now(timezone.utc).astimezone(tz).date()
 
 
+def _maybe_refill_restores(user: User, today: date) -> bool:
+    """
+    Ежемесячный сброс щитов. Возвращает True если что-то изменилось.
+
+    Сравниваем с первым числом текущего месяца — одно поле вместо пары
+    (month, year), нет риска ошибки при переходе декабрь → январь.
+    """
+    this_month = today.replace(day=1)
+    if user.streak_restores_reset_at == this_month:
+        return False
+    user.streak_restores_available = MAX_RESTORES_PER_MONTH
+    user.streak_restores_reset_at = this_month
+    return True
+
+
 async def _day_goal_met(user_id: int, day: date, goal: DailyGoal) -> bool:
-    """Попадают ли суммарные калории за день в допуск +-10% от цели."""
     logs = await FoodLog.filter(user_id=user_id, log_date=day).all()
     if not logs:
         return False
@@ -71,7 +81,6 @@ async def _day_goal_met(user_id: int, day: date, goal: DailyGoal) -> bool:
 
 
 async def _sync_streak_quest(user: User) -> None:
-    """Синхронизирует quest_key='streak' с текущим current_streak."""
     quests = await Quest.filter(
         user_id=user.telegram_id, quest_key="streak", status=Quest.STATUS_ACTIVE
     ).all()
@@ -84,39 +93,34 @@ async def _sync_streak_quest(user: User) -> None:
         await quest.save()
 
 
-# ─── Core streak logic ────────────────────────────────────────────────────────
+# ─── Core logic ───────────────────────────────────────────────────────────────
 
 
 async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal) -> bool:
     """
-    Закрывает все ПОЛНОСТЬЮ прошедшие дни (строго до сегодняшней локальной
-    даты). Сегодняшний день не трогает — это работа sync_today_credit_state.
+    Закрывает все прошедшие дни до сегодняшней локальной даты.
+    Вызывается на GET /me и GET /api/users/streak.
 
-    Быстрый путь (юзер уже заходил сегодня или вчера): одно сравнение дат,
-    без единого запроса к БД. Важно — функция висит на GET /api/users/me.
-
-    Правила streak_before_break в цикле:
-      • Первый переход current_streak > 0 → 0: сохраняем доразрывное
-        значение. Только первый переход — чтобы не перетереть при
-        нескольких пропущенных днях подряд.
-      • Met-день после разрыва: сбрасываем — пользователь начал новую
-        серию внутри backfill-окна, старый эпизод потери закрыт.
-      • Corrupted state: сбрасываем всё.
+    Ежемесячный сброс щитов проверяется здесь же: даже если pending_days == 0
+    (быстрый путь), новый месяц должен отразиться немедленно.
     """
     today = local_today(tz_name)
+    refilled = _maybe_refill_restores(user, today)
+
     last_checked = user.last_streak_check_date or (today - timedelta(days=1))
     pending_days = (today - last_checked).days - 1
 
     if pending_days <= 0:
-        return False
+        if refilled:
+            await user.save()
+        return refilled
 
     streak_before = user.current_streak
 
     if pending_days > MAX_BACKFILL_DAYS:
         logger.warning(
-            "User %s: %d pending days, treating as corrupted state — resetting.",
-            user.telegram_id,
-            pending_days,
+            "User %s: %d pending days — resetting as corrupted state.",
+            user.telegram_id, pending_days,
         )
         user.current_streak = 0
         user.streak_before_break = None
@@ -126,11 +130,9 @@ async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal) -> bool:
             if await _day_goal_met(user.telegram_id, cursor, goal):
                 user.current_streak += 1
                 user.max_streak = max(user.max_streak, user.current_streak)
-                # Met-день после разрыва — старый эпизод потери закрыт
                 if user.streak_before_break is not None:
                     user.streak_before_break = None
             else:
-                # Сохраняем только при ПЕРВОМ переходе в 0 в этом эпизоде
                 if user.current_streak > 0 and user.streak_before_break is None:
                     user.streak_before_break = user.current_streak
                 user.current_streak = 0
@@ -139,25 +141,18 @@ async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal) -> bool:
     user.last_streak_check_date = today - timedelta(days=1)
     await _sync_streak_quest(user)
     await user.save()
-    return user.current_streak != streak_before
+    return user.current_streak != streak_before or refilled
 
 
 async def sync_today_credit_state(
     user: User, goal: DailyGoal, tz_name: str, log_date: date
 ) -> None:
     """
-    Единая точка синхронизации кредита за сегодня.
-    Вызывается после создания И удаления FoodLog — смотрит на факт
-    прямо сейчас и приводит состояние в соответствие.
+    Синхронизирует кредит за сегодня после создания/удаления FoodLog.
 
-    Сброс восстановлений: происходит здесь при переходе 0 → 1, потому что
-    именно здесь семантически "начинается новая серия". Никакого
-    отдельного события не нужно — логика там, где происходит переход.
-
-    streak_before_break сбрасывается при кредите: новая серия стартовала,
-    старый эпизод потери закрыт, restore к нему больше неприменим.
-
-    Не реагирует на log_date в прошлом — прошлые дни закрывает reconcile.
+    Сброс щитов при новой серии: новая серия — всегда чистый старт,
+    щиты сбрасываются до MAX независимо от остатка. Нет смысла
+    переносить: новая серия = новые условия.
     """
     today = local_today(tz_name)
     if log_date != today:
@@ -176,9 +171,8 @@ async def sync_today_credit_state(
         user.streak_before_break = None
 
         if starting_fresh:
-            # Новая серия — выдаём свежий комплект восстановлений.
-            # Неиспользованные заряды от предыдущей серии сгорают.
-            user.streak_restores_available = MAX_RESTORES_PER_STREAK
+            # Новая серия — всегда полный комплект щитов.
+            user.streak_restores_available = MAX_RESTORES_PER_MONTH
 
         await _sync_streak_quest(user)
         await user.save()
@@ -186,29 +180,18 @@ async def sync_today_credit_state(
     elif not goal_met and already_credited:
         user.current_streak = max(user.current_streak - 1, 0)
         user.last_streak_check_date = today - timedelta(days=1)
-        # streak_before_break не трогаем: если серия упала до 0,
-        # reconcile при следующем чтении корректно сохранит доразрывное
-        # значение для restore.
         await _sync_streak_quest(user)
         await user.save()
 
 
-# ─── Read-only helpers ────────────────────────────────────────────────────────
+# ─── Read-only ────────────────────────────────────────────────────────────────
 
 
 def is_streak_active_today(user: User, tz_name: str) -> bool:
-    """True если кредит за сегодня уже выдан."""
     return user.last_streak_check_date == local_today(tz_name)
 
 
 async def get_today_progress(user_id: int, tz_name: str, goal: DailyGoal) -> dict:
-    """
-    Прогресс по калориям за сегодня относительно допуска +-10%.
-
-    Живёт внутри этого модуля (а не в api/users.py), чтобы
-    patch("services.streaks.local_today", ...) в тестах корректно
-    подменял дату для этой функции тоже.
-    """
     today = local_today(tz_name)
     logs = await FoodLog.filter(user_id=user_id, log_date=today).all()
     calories = sum(log.total_calories for log in logs)
@@ -239,22 +222,14 @@ async def get_today_progress(user_id: int, tz_name: str, goal: DailyGoal) -> dic
 
 async def restore_streak(user: User, tz_name: str) -> dict:
     """
-    Восстанавливает серию после разрыва, расходуя один заряд.
+    Восстанавливает серию после разрыва, расходуя один щит.
 
-    Условия:
-      • streak_before_break is not None — есть что восстанавливать
-      • streak_restores_available > 0 — есть заряды
-
-    После восстановления last_streak_check_date = вчера: сегодняшний
-    день ещё не засчитан, пользователь должен выполнить норму чтобы
-    продлить дальше. Это осознанный выбор — restore не "прощает" будущее,
-    он только закрывает прошлый пропуск.
-
-    Один заряд закрывает весь текущий эпизод потери, независимо от числа
-    пропущенных дней подряд. Пользователь мог болеть или быть без связи —
-    несправедливо было бы списывать по заряду за каждый день.
+    Перед проверкой availability вызываем _maybe_refill_restores — если
+    наступил новый месяц, пользователь получает свежие щиты и может
+    воспользоваться ими сразу, без лишнего запроса.
     """
     today = local_today(tz_name)
+    _maybe_refill_restores(user, today)
 
     if user.streak_before_break is None:
         return {"ok": False, "reason": "no_break_to_restore"}
