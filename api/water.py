@@ -10,12 +10,15 @@ from pydantic import BaseModel
 from .utils import get_current_user, parse_date
 from db import User, WaterLog, WaterLogSchema
 
+from typing import Optional
+
 router = APIRouter(prefix="/api/water", tags=["water"])
 
 
 class WaterIn(BaseModel):
     log_date: str  # "2026-05-26"
     amount_ml: int  # 250 | 400 | 500
+    source_label: Optional[str] = None  # напр. "☕ Кофе" — для ручных записей
 
 
 @router.post("")
@@ -24,6 +27,7 @@ async def add_water(body: WaterIn, user: User = Depends(get_current_user)):
         user_id=user.telegram_id,
         log_date=parse_date(body.log_date),
         amount_ml=body.amount_ml,
+        source_label=body.source_label,
     )
     return (await WaterLogSchema.from_tortoise_orm(log)).model_dump()
 

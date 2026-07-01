@@ -117,19 +117,28 @@ async def _recalc_totals(food_log: FoodLog) -> None:
         total_carbs_g=sum(float(i.carbs_g) for i in items),
         total_fiber_g=sum(float(i.fiber_g) for i in items),
         total_sugar_g=sum(float(i.sugar_g) for i in items),
+        total_water_ml=sum(i.water_ml for i in items),
     )
+
+
+def _primary_water_source_label(items: list[FoodItemIn]) -> str:
+    """
+    Название "главного" блюда лога — то же самое, что показывает
+    FoodLogCard как основной заголовок (log.items[0].food_name).
+    Используем его же для WaterLog.source_label, чтобы у пользователя
+    не было двух разных названий одного приёма пищи в разных экранах.
+    """
+    return items[0].food_name if items else "Приём пищи"
 
 
 async def _maybe_log_water(
     user: User,
     log_date: date,
     water_ml: int,
-    food_log_id: int,  # ← NEW: обязательный, чтобы всегда создавать связь
+    food_log_id: int,
+    source_label: Optional[str] = None,
 ) -> None:
-    """
-    Создаёт WaterLog привязанный к FoodLog.
-    food_log_id позволяет удалить эту запись вместе с едой.
-    """
+    """Создаёт WaterLog привязанный к FoodLog, с подписью источника."""
     if water_ml <= 0:
         return
     try:
@@ -137,7 +146,8 @@ async def _maybe_log_water(
             user_id=user.telegram_id,
             log_date=log_date,
             amount_ml=water_ml,
-            food_log_id=food_log_id,  # ← NEW
+            food_log_id=food_log_id,
+            source_label=source_label,
         )
     except Exception:
         logger.exception("auto water log failed for user %s", user.telegram_id)
@@ -182,7 +192,6 @@ async def _create_log_with_items(
     await _recalc_totals(food_log)
     await food_log.refresh_from_db()
 
-    # Приоритет: явный параметр > сумма по блюдам
     effective_water_ml = (
         water_ml if water_ml is not None
         else sum(item.water_ml for item in body_items)
@@ -193,7 +202,13 @@ async def _create_log_with_items(
     except Exception:
         logger.exception("streak credit failed for user %s", user.telegram_id)
 
-    await _maybe_log_water(user, log_date, effective_water_ml, food_log_id=food_log.id)
+    await _maybe_log_water(
+        user,
+        log_date,
+        effective_water_ml,
+        food_log_id=food_log.id,
+        source_label=_primary_water_source_label(body_items),
+    )
 
     items_data = await FoodItemSchema.from_queryset(
         FoodItem.filter(food_log_id=food_log.id)
@@ -313,6 +328,7 @@ async def get_logs_by_date(log_date: str, user: User = Depends(get_current_user)
             "carbs_g": sum(float(l["total_carbs_g"]) for l in result),
             "fiber_g": sum(float(l["total_fiber_g"]) for l in result),
             "sugar_g": sum(float(l["total_sugar_g"]) for l in result),
+            "water_ml": sum(l["total_water_ml"] for l in result),
         },
     }
 
