@@ -35,6 +35,7 @@ from db import User, DailyGoal, FoodLog, Quest
 logger = logging.getLogger(__name__)
 
 CALORIE_TOLERANCE_PCT = 0.10
+STARVATION_TOLERANCE_PCT = 0.30
 MAX_BACKFILL_DAYS = 365
 MAX_RESTORES_PER_MONTH = 3
 
@@ -71,13 +72,27 @@ def _maybe_refill_restores(user: User, today: date) -> bool:
     return True
 
 
-async def _day_goal_met(user_id: int, day: date, goal: DailyGoal) -> bool:
+async def _day_goal_met(user_id: int, day: date, goal: DailyGoal, goal_type: str) -> bool:
+    """Умная проверка выполнения цели в зависимости от её типа."""
     logs = await FoodLog.filter(user_id=user_id, log_date=day).all()
     if not logs:
         return False
     total = sum(log.total_calories for log in logs)
+
     tolerance = goal.calories * CALORIE_TOLERANCE_PCT
-    return abs(total - goal.calories) <= tolerance
+    calories_min = goal.calories - tolerance
+    calories_max = goal.calories + tolerance
+
+    if goal_type == "gain":
+        # Набор массы: главное не недобрать. Перебор не наказывается.
+        return total >= calories_min
+    elif goal_type == "lose":
+        # Похудение: строгий верхний лимит (+10%), но нижний лимит расширен до -30%
+        starvation_min = goal.calories * (1 - STARVATION_TOLERANCE_PCT)
+        return starvation_min <= total <= calories_max
+    else:
+        # Поддержание (maintain): классический коридор ±10%
+        return calories_min <= total <= calories_max
 
 
 async def _sync_streak_quest(user: User) -> None:
@@ -96,7 +111,7 @@ async def _sync_streak_quest(user: User) -> None:
 # ─── Core logic ───────────────────────────────────────────────────────────────
 
 
-async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal) -> bool:
+async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal, goal_type: str) -> bool:
     """
     Закрывает все прошедшие дни до сегодняшней локальной даты.
     Вызывается на GET /me и GET /api/users/streak.
@@ -128,7 +143,7 @@ async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal) -> bool:
     else:
         cursor = last_checked + timedelta(days=1)
         while cursor < today:
-            if await _day_goal_met(user.telegram_id, cursor, goal):
+            if await _day_goal_met(user.telegram_id, cursor, goal, goal_type):
                 user.current_streak += 1
                 user.max_streak = max(user.max_streak, user.current_streak)
                 if user.streak_before_break is not None:
@@ -146,7 +161,7 @@ async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal) -> bool:
 
 
 async def sync_today_credit_state(
-    user: User, goal: DailyGoal, tz_name: str, log_date: date
+    user: User, goal: DailyGoal, tz_name: str, log_date: date, goal_type: str
 ) -> None:
     """
     Синхронизирует кредит за сегодня после создания/удаления FoodLog.
@@ -159,9 +174,9 @@ async def sync_today_credit_state(
     if log_date != today:
         return
 
-    await reconcile_streak(user, tz_name, goal)
+    await reconcile_streak(user, tz_name, goal, goal_type)
 
-    goal_met = await _day_goal_met(user.telegram_id, today, goal)
+    goal_met = await _day_goal_met(user.telegram_id, today, goal, goal_type)
     already_credited = user.last_streak_check_date == today
 
     if goal_met and not already_credited:
@@ -192,7 +207,7 @@ def is_streak_active_today(user: User, tz_name: str) -> bool:
     return user.last_streak_check_date == local_today(tz_name)
 
 
-async def get_today_progress(user_id: int, tz_name: str, goal: DailyGoal) -> dict:
+async def get_today_progress(user_id: int, tz_name: str, goal: DailyGoal, goal_type: str) -> dict:
     today = local_today(tz_name)
     logs = await FoodLog.filter(user_id=user_id, log_date=today).all()
     calories = sum(log.total_calories for log in logs)
@@ -201,12 +216,30 @@ async def get_today_progress(user_id: int, tz_name: str, goal: DailyGoal) -> dic
     calories_min = goal.calories - tolerance
     calories_max = goal.calories + tolerance
 
-    if calories < calories_min:
-        status, calories_remaining = "below", calories_min - calories
-    elif calories > calories_max:
-        status, calories_remaining = "over", 0
+    if goal_type == "gain":
+        if calories < calories_min:
+            status, calories_remaining = "below", calories_min - calories
+        else:
+            status, calories_remaining = "met", 0
+
+    elif goal_type == "lose":
+        starvation_min = round(goal.calories * (1 - STARVATION_TOLERANCE_PCT))
+        if calories < starvation_min:
+            status, calories_remaining = "below", starvation_min - calories
+        elif calories > calories_max:
+            status, calories_remaining = "over", 0
+        else:
+            status, calories_remaining = "met", 0
+        # Для UI-прогрессбара "зеленая зона" начинается от starvation_min
+        calories_min = starvation_min
+
     else:
-        status, calories_remaining = "met", 0
+        if calories < calories_min:
+            status, calories_remaining = "below", calories_min - calories
+        elif calories > calories_max:
+            status, calories_remaining = "over", 0
+        else:
+            status, calories_remaining = "met", 0
 
     return {
         "calories": calories,

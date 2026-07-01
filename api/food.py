@@ -102,10 +102,14 @@ async def _maybe_sync_streak(user: User, log_date: date) -> None:
     profile = await UserProfile.get_or_none(user_id=user.telegram_id)
     if not profile:
         return
+
     goal = await DailyGoal.get_or_none(user_id=user.telegram_id)
     if not goal:
         return
-    await sync_today_credit_state(user, goal, profile.timezone, log_date)
+
+    await sync_today_credit_state(
+        user, goal, profile.timezone, log_date, profile.goal_type
+    )
 
 
 async def _recalc_totals(food_log: FoodLog) -> None:

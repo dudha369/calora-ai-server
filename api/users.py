@@ -61,7 +61,7 @@ async def get_me(user: User = Depends(get_current_user)):
     # сегодня) — одно сравнение дат без запроса к БД.
     if profile and goal:
         try:
-            await reconcile_streak(user, profile.timezone, goal)
+            await reconcile_streak(user, profile.timezone, goal, profile.goal_type)
         except Exception:
             logger.exception("streak reconcile failed for user %s", user.telegram_id)
 
@@ -100,11 +100,13 @@ async def get_streak(user: User = Depends(get_current_user)):
         }
 
     try:
-        await reconcile_streak(user, profile.timezone, goal)
+        await reconcile_streak(user, profile.timezone, goal, profile.goal_type)
     except Exception:
         logger.exception("streak reconcile failed for user %s", user.telegram_id)
 
-    today_progress = await get_today_progress(user.telegram_id, profile.timezone, goal)
+    today_progress = await get_today_progress(
+        user.telegram_id, profile.timezone, goal, profile.goal_type
+    )
 
     return {
         "current_streak": user.current_streak,
