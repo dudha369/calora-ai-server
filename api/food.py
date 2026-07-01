@@ -193,8 +193,7 @@ async def _create_log_with_items(
     await food_log.refresh_from_db()
 
     effective_water_ml = (
-        water_ml if water_ml is not None
-        else sum(item.water_ml for item in body_items)
+        water_ml if water_ml is not None else sum(item.water_ml for item in body_items)
     )
 
     try:

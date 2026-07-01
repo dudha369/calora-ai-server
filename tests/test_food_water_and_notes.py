@@ -144,9 +144,17 @@ async def test_delete_food_log_removes_auto_water(client: AsyncClient, seeded_us
         "/api/food/log",
         json={
             "log_date": log_date,
-            "items": [{"food_name": "Кофе", "portion_g": 200,
-                       "calories": 5, "protein_g": 0.3, "fat_g": 0.1,
-                       "carbs_g": 0.8, "water_ml": 196}],
+            "items": [
+                {
+                    "food_name": "Кофе",
+                    "portion_g": 200,
+                    "calories": 5,
+                    "protein_g": 0.3,
+                    "fat_g": 0.1,
+                    "carbs_g": 0.8,
+                    "water_ml": 196,
+                }
+            ],
             # water_ml суммируется из items на бэкенде
         },
     )
@@ -180,9 +188,17 @@ async def test_repeat_food_log_copies_water(client: AsyncClient, seeded_user):
         "/api/food/log",
         json={
             "log_date": log_date_original,
-            "items": [{"food_name": "Американо", "portion_g": 200,
-                       "calories": 5, "protein_g": 0.3, "fat_g": 0.1,
-                       "carbs_g": 0.8, "water_ml": 196}],
+            "items": [
+                {
+                    "food_name": "Американо",
+                    "portion_g": 200,
+                    "calories": 5,
+                    "protein_g": 0.3,
+                    "fat_g": 0.1,
+                    "carbs_g": 0.8,
+                    "water_ml": 196,
+                }
+            ],
         },
     )
     original_log_id = resp.json()["log"]["id"]
@@ -193,9 +209,17 @@ async def test_repeat_food_log_copies_water(client: AsyncClient, seeded_user):
         "/api/food/log",
         json={
             "log_date": log_date_today,
-            "items": [{"food_name": "Американо", "portion_g": 200,
-                       "calories": 5, "protein_g": 0.3, "fat_g": 0.1,
-                       "carbs_g": 0.8, "water_ml": 196}],
+            "items": [
+                {
+                    "food_name": "Американо",
+                    "portion_g": 200,
+                    "calories": 5,
+                    "protein_g": 0.3,
+                    "fat_g": 0.1,
+                    "carbs_g": 0.8,
+                    "water_ml": 196,
+                }
+            ],
             # Нет явного water_ml на уровне лога — бэкенд суммирует из items
         },
     )

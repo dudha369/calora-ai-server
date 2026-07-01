@@ -15,18 +15,18 @@ logger = logging.getLogger(__name__)
 
 _client = genai.Client(
     api_key=config.GEMINI_API_KEY.get_secret_value(),
-    http_options={"base_url": config.CLOUDFLARE_WORKER_ENDPOINT.get_secret_value()}
+    http_options={"base_url": config.CLOUDFLARE_WORKER_ENDPOINT.get_secret_value()},
 )
 MODEL = "gemini-2.5-flash"
 
-GEMINI_TIMEOUT = 60          # было 30 — image-анализ может занимать дольше
+GEMINI_TIMEOUT = 60  # было 30 — image-анализ может занимать дольше
 MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 
 # Лимиты вынесены в константы: один файл для тюнинга, ноль дублирования.
 # Gemini 2.5 Flash тратит thinking-токены из того же пула max_output_tokens,
 # поэтому реального «места» для JSON всегда меньше, чем написано в цифре.
-MAX_OUTPUT_TOKENS_TEXT  = 4_096   # советы / квесты / цели — компактный JSON
+MAX_OUTPUT_TOKENS_TEXT = 4_096  # советы / квесты / цели — компактный JSON
 MAX_OUTPUT_TOKENS_IMAGE = 16_384  # N блюд + total + notes — нужен запас
 
 
@@ -62,7 +62,11 @@ async def _with_retry(coro_factory, *, operation: str):
             delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
             logger.warning(
                 "Gemini %s unavailable (attempt %d/%d), retrying in %.1fs: %s",
-                operation, attempt, MAX_RETRIES, delay, exc,
+                operation,
+                attempt,
+                MAX_RETRIES,
+                delay,
+                exc,
             )
             await asyncio.sleep(delay)
 
@@ -79,7 +83,7 @@ def _parse_json(text: str) -> dict:
 
     if "<think>" in text:
         end = text.find("</think>")
-        text = text[end + 8:].strip() if end != -1 else text
+        text = text[end + 8 :].strip() if end != -1 else text
 
     try:
         return json.loads(text)

@@ -120,7 +120,8 @@ async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal) -> bool:
     if pending_days > MAX_BACKFILL_DAYS:
         logger.warning(
             "User %s: %d pending days — resetting as corrupted state.",
-            user.telegram_id, pending_days,
+            user.telegram_id,
+            pending_days,
         )
         user.current_streak = 0
         user.streak_before_break = None

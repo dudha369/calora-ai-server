@@ -104,9 +104,7 @@ async def get_streak(user: User = Depends(get_current_user)):
     except Exception:
         logger.exception("streak reconcile failed for user %s", user.telegram_id)
 
-    today_progress = await get_today_progress(
-        user.telegram_id, profile.timezone, goal
-    )
+    today_progress = await get_today_progress(user.telegram_id, profile.timezone, goal)
 
     return {
         "current_streak": user.current_streak,
@@ -115,8 +113,7 @@ async def get_streak(user: User = Depends(get_current_user)):
         "streak_restores_available": user.streak_restores_available,
         # can_restore вычисляется сервером — клиент не видит streak_before_break
         "can_restore": (
-            user.streak_before_break is not None
-            and user.streak_restores_available > 0
+            user.streak_before_break is not None and user.streak_restores_available > 0
         ),
         "today_progress": today_progress,
     }

@@ -39,7 +39,9 @@ async def _user_and_goal():
 @pytest.mark.asyncio
 async def test_reconcile_breaks_streak_after_missed_day(seeded_user):
     """Пропущенный день обрывает серию и сохраняет доразрывное значение."""
-    await User.filter(telegram_id=FAKE_TG_USER_ID).update(current_streak=4, max_streak=4)
+    await User.filter(telegram_id=FAKE_TG_USER_ID).update(
+        current_streak=4, max_streak=4
+    )
     await _set_last_checked(TODAY - timedelta(days=2))
 
     user, goal = await _user_and_goal()
@@ -49,7 +51,7 @@ async def test_reconcile_breaks_streak_after_missed_day(seeded_user):
     user = await User.get(telegram_id=FAKE_TG_USER_ID)
     assert changed is True
     assert user.current_streak == 0
-    assert user.max_streak == 4           # рекорд не уменьшается
+    assert user.max_streak == 4  # рекорд не уменьшается
     assert user.streak_before_break == 4  # сохранено для restore
 
 
@@ -198,7 +200,9 @@ async def test_sync_credits_after_overeating_correction(seeded_user):
         user = await User.get(telegram_id=FAKE_TG_USER_ID)
         assert user.current_streak == 0  # всё ещё below
 
-        await FoodLog.create(user_id=FAKE_TG_USER_ID, log_date=TODAY, total_calories=500)
+        await FoodLog.create(
+            user_id=FAKE_TG_USER_ID, log_date=TODAY, total_calories=500
+        )
         await sync_today_credit_state(user, goal, "Europe/Kyiv", TODAY)
 
     user = await User.get(telegram_id=FAKE_TG_USER_ID)
@@ -250,7 +254,9 @@ async def test_restores_always_reset_on_new_streak_start(seeded_user):
             streak_restores_available=leftover,
             last_streak_check_date=YESTERDAY,
         )
-        await FoodLog.create(user_id=FAKE_TG_USER_ID, log_date=TODAY, total_calories=2000)
+        await FoodLog.create(
+            user_id=FAKE_TG_USER_ID, log_date=TODAY, total_calories=2000
+        )
 
         user, goal = await _user_and_goal()
         with _patched_today():
@@ -419,13 +425,22 @@ async def test_food_log_credits_streak_e2e(client: AsyncClient, seeded_user):
     await _set_last_checked(YESTERDAY)
 
     with _patched_today():
-        resp = await client.post("/api/food/log", json={
-            "log_date": TODAY.isoformat(),
-            "items": [{
-                "food_name": "Тест", "portion_g": 500, "calories": 2000,
-                "protein_g": 140, "fat_g": 65, "carbs_g": 200,
-            }],
-        })
+        resp = await client.post(
+            "/api/food/log",
+            json={
+                "log_date": TODAY.isoformat(),
+                "items": [
+                    {
+                        "food_name": "Тест",
+                        "portion_g": 500,
+                        "calories": 2000,
+                        "protein_g": 140,
+                        "fat_g": 65,
+                        "carbs_g": 200,
+                    }
+                ],
+            },
+        )
         assert resp.status_code == 200
 
         me = await client.get("/api/users/me")
@@ -439,13 +454,22 @@ async def test_food_delete_reverts_streak_e2e(client: AsyncClient, seeded_user):
     await _set_last_checked(YESTERDAY)
 
     with _patched_today():
-        resp = await client.post("/api/food/log", json={
-            "log_date": TODAY.isoformat(),
-            "items": [{
-                "food_name": "Тест", "portion_g": 500, "calories": 2000,
-                "protein_g": 140, "fat_g": 65, "carbs_g": 200,
-            }],
-        })
+        resp = await client.post(
+            "/api/food/log",
+            json={
+                "log_date": TODAY.isoformat(),
+                "items": [
+                    {
+                        "food_name": "Тест",
+                        "portion_g": 500,
+                        "calories": 2000,
+                        "protein_g": 140,
+                        "fat_g": 65,
+                        "carbs_g": 200,
+                    }
+                ],
+            },
+        )
         log_id = resp.json()["log"]["id"]
 
         me = await client.get("/api/users/me")
@@ -497,14 +521,18 @@ async def test_restore_endpoint_succeeds(client: AsyncClient, seeded_user):
 
 
 @pytest.mark.asyncio
-async def test_restore_endpoint_returns_400_when_no_break(client: AsyncClient, seeded_user):
+async def test_restore_endpoint_returns_400_when_no_break(
+    client: AsyncClient, seeded_user
+):
     with _patched_today():
         resp = await client.post("/api/users/streak/restore")
     assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_restore_endpoint_returns_409_when_no_charges(client: AsyncClient, seeded_user):
+async def test_restore_endpoint_returns_409_when_no_charges(
+    client: AsyncClient, seeded_user
+):
     await User.filter(telegram_id=FAKE_TG_USER_ID).update(
         current_streak=0,
         streak_before_break=5,
@@ -516,7 +544,9 @@ async def test_restore_endpoint_returns_409_when_no_charges(client: AsyncClient,
 
 
 @pytest.mark.asyncio
-async def test_streak_endpoint_shows_can_restore_after_break(client: AsyncClient, seeded_user):
+async def test_streak_endpoint_shows_can_restore_after_break(
+    client: AsyncClient, seeded_user
+):
     """GET /api/users/streak отдаёт can_restore=True если серия сломана и есть заряды."""
     await User.filter(telegram_id=FAKE_TG_USER_ID).update(
         current_streak=0,
@@ -529,4 +559,3 @@ async def test_streak_endpoint_shows_can_restore_after_break(client: AsyncClient
 
     assert resp.status_code == 200
     assert resp.json()["can_restore"] is True
-    
