@@ -147,8 +147,6 @@ async def get_or_create_user(
             update["full_name"] = full_name
         if username is not None and user.username != username:
             update["username"] = username
-        if language_code and user.language_code != language_code:
-            update["language_code"] = language_code
         await User.filter(telegram_id=telegram_id).update(**update)
         await user.refresh_from_db()
 

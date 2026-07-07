@@ -6,6 +6,7 @@ DELETE /api/users/me — полное удаление аккаунта (нео�
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from .utils import get_current_user
 from db import (
@@ -77,6 +78,27 @@ async def get_me(user: User = Depends(get_current_user)):
         "needs_onboarding": needs_onboarding,
         "onboarding_step": onboarding_step,
     }
+
+
+class LanguageIn(BaseModel):
+    language_code: str = Field(min_length=2, max_length=8)
+
+
+@router.patch("/language")
+async def update_language(body: LanguageIn, user: User = Depends(get_current_user)):
+    """
+    Сохраняет явный выбор языка пользователя в приложении.
+
+    Намеренно отделено от автоматического language_code в
+    get_or_create_user (который отражает язык *устройства* в Telegram,
+    а не то, что пользователь выбрал в приложении — см. api/utils.py).
+    Используется для рассылок / будущих уведомлений на нужном языке;
+    источник истины для самого UI остаётся CloudStorage.
+    """
+    await User.filter(telegram_id=user.telegram_id).update(
+        language_code=body.language_code
+    )
+    return {"ok": True}
 
 
 @router.get("/streak")
