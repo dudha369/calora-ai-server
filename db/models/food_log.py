@@ -19,6 +19,7 @@ class FoodLog(Model):
     log_date = fields.DateField()
     logged_at = fields.DatetimeField(auto_now_add=True)
     photo_url = fields.TextField(null=True)
+    meal_name = fields.CharField(max_length=200, null=True)
 
     total_calories = fields.SmallIntField(default=0)
     total_protein_g = fields.DecimalField(max_digits=6, decimal_places=1, default=0)
