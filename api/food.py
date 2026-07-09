@@ -81,6 +81,7 @@ class FoodLogIn(BaseModel):
     log_date: str
     items: list[FoodItemIn]
     photo_key: Optional[str] = None  # ключ объекта в B2, не URL
+    meal_name: Optional[str] = None  # обобщающее название приёма пищи (из AI)
     # Суммарная гидратация, найденная ИИ среди блюд/напитков на фото.
     # Если > 0 — после сохранения FoodLog автоматически создаётся WaterLog.
     water_ml: Optional[int] = None
@@ -174,6 +175,7 @@ async def _create_log_with_items(
     body_items: list[FoodItemIn],
     photo_key: Optional[str] = None,
     water_ml: Optional[int] = None,
+    meal_name: Optional[str] = None,
 ) -> dict:
     """
     Общая логика создания FoodLog + FoodItems для /log и /log-barcode.
@@ -188,6 +190,7 @@ async def _create_log_with_items(
         user_id=user.telegram_id,
         log_date=log_date,
         photo_url=photo_key,
+        meal_name=meal_name,
     )
 
     for item in body_items:
@@ -280,7 +283,9 @@ async def analyze_photo(
     # Загружаем фото параллельно с анализом — экономим ~300-500ms
     try:
         result, photo_key = await asyncio.gather(
-            analyze_food_photo(image_bytes, mime_type, notes=notes),
+            analyze_food_photo(
+                image_bytes, mime_type, notes=notes, language=user.language_code
+            ),
             upload_food_photo(image_bytes, user.telegram_id, mime_type),
         )
     except GeminiUnavailableError as exc:
@@ -318,6 +323,7 @@ async def create_log(body: FoodLogIn, user: User = Depends(get_current_user)):
         body.items,
         photo_key=photo_key,
         water_ml=body.water_ml,
+        meal_name=body.meal_name,
     )
 
 
