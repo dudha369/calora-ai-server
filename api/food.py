@@ -84,6 +84,10 @@ class FoodLogIn(BaseModel):
     # Суммарная гидратация, найденная ИИ среди блюд/напитков на фото.
     # Если > 0 — после сохранения FoodLog автоматически создаётся WaterLog.
     water_ml: Optional[int] = None
+    # Копирование фото из существующего FoodLog (по id).
+    # Если указан и photo_key не задан — берём photo_url (ключ B2) из
+    # указанного лога (только если он принадлежит тому же пользователю).
+    copy_photo_from_log_id: Optional[int] = None
 
 
 class FoodLogUpdate(BaseModel):
@@ -298,11 +302,21 @@ async def analyze_photo(
 
 @router.post("/log")
 async def create_log(body: FoodLogIn, user: User = Depends(get_current_user)):
+    photo_key = body.photo_key
+
+    # Копирование фото из другой записи (для repeat-with-photo)
+    if not photo_key and body.copy_photo_from_log_id is not None:
+        source_log = await FoodLog.get_or_none(
+            id=body.copy_photo_from_log_id, user_id=user.telegram_id
+        )
+        if source_log and source_log.photo_url:
+            photo_key = source_log.photo_url  # photo_url хранит B2 key
+
     return await _create_log_with_items(
         user,
         body.log_date,
         body.items,
-        photo_key=body.photo_key,
+        photo_key=photo_key,
         water_ml=body.water_ml,
     )
 
