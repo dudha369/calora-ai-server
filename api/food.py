@@ -2,6 +2,7 @@
 POST /api/food/analyze    — анализ фото через Gemini (не сохраняет)
 POST /api/food/log        — сохранить запись еды
 POST /api/food/log-barcode — сохранить запись по штрихкоду
+PUT  /api/food/{log_id}   — редактировать запись (заменить items, пересчитать)
 GET  /api/food/{date}     — все записи за дату (YYYY-MM-DD)
 DELETE /api/food/{log_id} — удалить запись (+ фото из B2)
 DELETE /api/food/photo/{photo_key:path} — удалить неиспользованное фото
@@ -83,6 +84,12 @@ class FoodLogIn(BaseModel):
     # Суммарная гидратация, найденная ИИ среди блюд/напитков на фото.
     # Если > 0 — после сохранения FoodLog автоматически создаётся WaterLog.
     water_ml: Optional[int] = None
+
+
+class FoodLogUpdate(BaseModel):
+    """Тело PUT /api/food/{log_id} — полная замена items."""
+
+    items: list[FoodItemIn]
 
 
 class BarcodeLogIn(BaseModel):
@@ -298,6 +305,71 @@ async def create_log(body: FoodLogIn, user: User = Depends(get_current_user)):
         photo_key=body.photo_key,
         water_ml=body.water_ml,
     )
+
+
+@router.put("/{log_id}")
+async def update_log(
+    log_id: int,
+    body: FoodLogUpdate,
+    user: User = Depends(get_current_user),
+):
+    """
+    Правка уже залогированной записи (например, ИИ ошибся в порции/КБЖУ).
+
+    Полностью заменяет items — тот же контракт, что и при создании,
+    поэтому весь UI-код правки просто переиспользует FoodItemIn.
+    """
+    food_log = await FoodLog.get_or_none(id=log_id, user_id=user.telegram_id)
+    if not food_log:
+        raise HTTPException(status_code=404, detail="Log not found")
+    if not body.items:
+        raise HTTPException(status_code=422, detail="At least one item is required")
+
+    # Атомарная замена: удаляем все старые items и создаём новые
+    await FoodItem.filter(food_log_id=log_id).delete()
+    for item in body.items:
+        await FoodItem.create(
+            food_log_id=log_id,
+            food_name=item.food_name,
+            portion_g=Decimal(str(item.portion_g)),
+            calories=item.calories,
+            protein_g=Decimal(str(item.protein_g)),
+            fat_g=Decimal(str(item.fat_g)),
+            carbs_g=Decimal(str(item.carbs_g)),
+            fiber_g=Decimal(str(item.fiber_g)),
+            sugar_g=Decimal(str(item.sugar_g)),
+            water_ml=item.water_ml,
+        )
+
+    await _recalc_totals(food_log)
+    await food_log.refresh_from_db()
+
+    # Пересобираем авто-воду записи под новые значения.
+    # Ручные записи воды (food_log_id=NULL) не затрагиваются.
+    await WaterLog.filter(food_log_id=log_id).delete()
+    await _maybe_log_water(
+        user,
+        food_log.log_date,
+        sum(item.water_ml for item in body.items),
+        food_log_id=log_id,
+        source_label=_primary_water_source_label(body.items),
+    )
+
+    # Изменение калорий задним числом может повлиять на дневную цель
+    try:
+        await _maybe_sync_streak(user, food_log.log_date)
+    except Exception:
+        logger.exception("streak resync failed for user %s", user.telegram_id)
+
+    items_data = await FoodItemSchema.from_queryset(
+        FoodItem.filter(food_log_id=log_id)
+    )
+    log_dict = (await FoodLogSchema.from_tortoise_orm(food_log)).model_dump()
+
+    return {
+        "log": {**log_dict, "photo_url": await get_photo_url(food_log.photo_url)},
+        "items": [i.model_dump() for i in items_data],
+    }
 
 
 @router.get("/{log_date}")
