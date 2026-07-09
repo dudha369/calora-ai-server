@@ -5,6 +5,7 @@ GET    /api/admin/config        — проверка is_admin
 GET    /api/admin/dashboard     — статистика
 GET    /api/admin/users         — список пользователей
 GET    /api/admin/users/{id}    — карточка пользователя
+GET    /api/admin/users/{id}/food-logs — пагинированные food logs с фото
 POST   /api/admin/users/{id}/reset   — сброс профиля
 DELETE /api/admin/users/{id}         — удаление аккаунта
 GET    /api/admin/settings      — feature flags
@@ -15,6 +16,7 @@ DELETE /api/admin/whitelist/{id}     — убрать из whitelist
 GET    /api/admin/users/{id}/avatar  — аватарка пользователя (proxy)
 POST   /api/admin/broadcast          — отправить рассылку
 GET    /api/admin/broadcasts         — история рассылок
+GET    /api/admin/maintenance-status — проверка maintenance mode (публичный)
 """
 
 import asyncio
@@ -46,7 +48,7 @@ from db import (
 )
 from db.models.app_settings import AppSettings
 from db.models.broadcast import Broadcast
-from services.storage import delete_food_photos
+from services.storage import delete_food_photos, get_photo_url
 from services.reminders import send_daily_reminders
 from services.streaks import reconcile_streak
 
@@ -219,6 +221,7 @@ async def list_users(
                 "max_streak": u.max_streak,
                 "quests_completed": u.quests_completed,
                 "created_at": u.created_at.isoformat(),
+                "last_active_at": u.last_active_at.isoformat() if u.last_active_at else None,
                 "onboarded": u.telegram_id in onboarded_ids_set,
                 "in_whitelist": u.telegram_id in whitelist_ids,
             }
@@ -262,20 +265,24 @@ async def get_user_detail(
         except Exception:
             logger.exception("streak reconcile failed for user %s", user_id)
 
-    # Последние 10 записей еды
+    # Последние 10 записей еды с presigned URLs
     food_logs = await FoodLog.filter(user_id=user_id).order_by("-logged_at").limit(10)
     food_data = []
     for fl in food_logs:
         items = await FoodItem.filter(food_log_id=fl.id).all()
+        photo_signed_url = await get_photo_url(fl.photo_url)
         food_data.append(
             {
                 "id": fl.id,
                 "log_date": fl.log_date.isoformat(),
-                "photo_url": fl.photo_url,
+                "logged_at": fl.logged_at.isoformat(),
+                "photo_url": photo_signed_url,
                 "total_calories": fl.total_calories,
                 "total_protein_g": float(fl.total_protein_g),
                 "total_fat_g": float(fl.total_fat_g),
                 "total_carbs_g": float(fl.total_carbs_g),
+                "total_fiber_g": float(fl.total_fiber_g),
+                "total_sugar_g": float(fl.total_sugar_g),
                 "items": [
                     {
                         "food_name": item.food_name,
@@ -286,6 +293,9 @@ async def get_user_detail(
                 ],
             }
         )
+
+    # Общее количество food logs для пагинации на фронте
+    total_food_logs = await FoodLog.filter(user_id=user_id).count()
 
     # Квесты
     quests = await Quest.filter(user_id=user_id).order_by("-expires_at").limit(5)
@@ -312,12 +322,70 @@ async def get_user_detail(
             "max_streak": user.max_streak,
             "quests_completed": user.quests_completed,
             "created_at": user.created_at.isoformat(),
+            "last_active_at": user.last_active_at.isoformat() if user.last_active_at else None,
             "in_whitelist": user.telegram_id in whitelist_ids,
         },
         "profile": profile_data,
         "goal": goal_data,
         "food_logs": food_data,
+        "total_food_logs": total_food_logs,
         "quests": quests_data,
+    }
+
+
+# ── Paginated food logs for admin ────────────────────────────────────────────
+
+
+@router.get("/users/{user_id}/food-logs")
+async def get_user_food_logs(
+    user_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=50),
+    _: User = Depends(get_admin_user),
+):
+    """Paginated food logs with presigned photo URLs for admin user detail."""
+    user = await User.get_or_none(telegram_id=user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    qs = FoodLog.filter(user_id=user_id)
+    total = await qs.count()
+    offset = (page - 1) * per_page
+    food_logs = await qs.order_by("-logged_at").offset(offset).limit(per_page)
+
+    food_data = []
+    for fl in food_logs:
+        items = await FoodItem.filter(food_log_id=fl.id).all()
+        photo_signed_url = await get_photo_url(fl.photo_url)
+        food_data.append(
+            {
+                "id": fl.id,
+                "log_date": fl.log_date.isoformat(),
+                "logged_at": fl.logged_at.isoformat(),
+                "photo_url": photo_signed_url,
+                "total_calories": fl.total_calories,
+                "total_protein_g": float(fl.total_protein_g),
+                "total_fat_g": float(fl.total_fat_g),
+                "total_carbs_g": float(fl.total_carbs_g),
+                "total_fiber_g": float(fl.total_fiber_g),
+                "total_sugar_g": float(fl.total_sugar_g),
+                "items": [
+                    {
+                        "food_name": item.food_name,
+                        "portion_g": float(item.portion_g),
+                        "calories": item.calories,
+                    }
+                    for item in items
+                ],
+            }
+        )
+
+    return {
+        "food_logs": food_data,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "pages": (total + per_page - 1) // per_page,
     }
 
 
@@ -364,6 +432,9 @@ async def get_settings(_: User = Depends(get_admin_user)):
             "maintenance_mode": await AppSettings.get_value(
                 "maintenance_mode", "false"
             ),
+            "maintenance_message": await AppSettings.get_value(
+                "maintenance_message", ""
+            ),
             "registration_enabled": await AppSettings.get_value(
                 "registration_enabled", "true"
             ),
@@ -375,7 +446,7 @@ class SettingsUpdate(BaseModel):
     settings: dict[str, str]
 
 
-_DB_SETTINGS_KEYS = {"maintenance_mode", "registration_enabled"}
+_DB_SETTINGS_KEYS = {"maintenance_mode", "maintenance_message", "registration_enabled"}
 
 
 @router.put("/settings")
@@ -392,6 +463,25 @@ async def update_settings(
             await AppSettings.set_value(key, value)
         # unknown keys silently ignored
     return {"ok": True}
+
+
+# ── Maintenance status (public, no admin required) ───────────────────────────
+
+
+@router.get("/maintenance-status")
+async def maintenance_status():
+    """
+    Public endpoint — клиент вызывает его ДО авторизации, чтобы показать
+    экран тех. перерыва. Не требует initData/auth.
+    """
+    is_maintenance = await AppSettings.get_bool("maintenance_mode", False)
+    message = ""
+    if is_maintenance:
+        message = await AppSettings.get_value("maintenance_message", "")
+    return {
+        "maintenance": is_maintenance,
+        "message": message,
+    }
 
 
 # ── Whitelist ────────────────────────────────────────────────────────────────

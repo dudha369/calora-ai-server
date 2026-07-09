@@ -3,6 +3,9 @@
 
 get_current_user — единственная точка входа для эндпоинтов.
 Заменяет пару Depends(auth) + get_or_create_user() одним вызовом.
+
+Maintenance mode: при включённом maintenance_mode все не-админ юзеры
+получают 503 Service Unavailable. Значение кешируется на 10 сек.
 """
 
 import logging
@@ -16,6 +19,7 @@ from aiogram.utils.web_app import WebAppInitData, safe_parse_webapp_init_data
 
 from config import config
 from db import User
+from db.models.app_settings import AppSettings
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +71,24 @@ def check_rate_limit(
             detail=f"Too many requests. Max {max_per_minute} per minute.",
         )
     _rate_limits[bucket][user_id].append(now)
+
+
+# ─── Maintenance Mode Cache ───────────────────────────────────────────────────
+
+_maintenance_cache: dict[str, object] = {"value": False, "ts": 0.0}
+_MAINTENANCE_CACHE_TTL = 10  # секунд
+
+
+async def is_maintenance_mode() -> bool:
+    """Возвращает текущий статус maintenance mode с кешем на 10 сек."""
+    now = time.monotonic()
+    if now - float(_maintenance_cache["ts"]) < _MAINTENANCE_CACHE_TTL:
+        return bool(_maintenance_cache["value"])
+
+    val = await AppSettings.get_bool("maintenance_mode", False)
+    _maintenance_cache["value"] = val
+    _maintenance_cache["ts"] = now
+    return val
 
 
 # ─── Date Validation ─────────────────────────────────────────────────────────
@@ -159,16 +181,23 @@ async def get_current_user(
     """
     Единая зависимость: auth + get_or_create_user в одном шаге.
 
+    При включённом maintenance_mode не-админ пользователи получают 503.
+    Админ проходит свободно.
+
     Использование:
         @router.get("/endpoint")
         async def handler(user: User = Depends(get_current_user)):
             ...
-
-    Заменяет бывший паттерн:
-        auth_data = Depends(auth)
-        user = await get_or_create_user(auth_data.user.id, ...)
     """
     tg = auth_data.user
+
+    # Maintenance mode: блокируем всех кроме админа
+    if tg.id != config.ADMIN_TELEGRAM_ID and await is_maintenance_mode():
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "maintenance", "reason": "maintenance_mode"},
+        )
+
     return await get_or_create_user(
         telegram_id=tg.id,
         full_name=tg.first_name or "Unknown",
