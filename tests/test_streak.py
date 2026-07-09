@@ -46,7 +46,7 @@ async def test_reconcile_breaks_streak_after_missed_day(seeded_user):
 
     user, goal = await _user_and_goal()
     with _patched_today():
-        changed = await reconcile_streak(user, "Europe/Kyiv", goal)
+        changed = await reconcile_streak(user, "Europe/Kyiv", goal, "lose")
 
     user = await User.get(telegram_id=FAKE_TG_USER_ID)
     assert changed is True
@@ -63,7 +63,7 @@ async def test_reconcile_saves_streak_before_break_only_on_first_miss(seeded_use
 
     user, goal = await _user_and_goal()
     with _patched_today():
-        await reconcile_streak(user, "Europe/Kyiv", goal)
+        await reconcile_streak(user, "Europe/Kyiv", goal, "lose")
 
     user = await User.get(telegram_id=FAKE_TG_USER_ID)
     assert user.current_streak == 0
@@ -83,7 +83,7 @@ async def test_reconcile_clears_streak_before_break_on_recovery(seeded_user):
 
     user, goal = await _user_and_goal()
     with _patched_today():
-        await reconcile_streak(user, "Europe/Kyiv", goal)
+        await reconcile_streak(user, "Europe/Kyiv", goal, "lose")
 
     user = await User.get(telegram_id=FAKE_TG_USER_ID)
     assert user.current_streak == 1
@@ -97,7 +97,7 @@ async def test_reconcile_is_noop_when_already_checked_today(seeded_user):
 
     user, goal = await _user_and_goal()
     with _patched_today():
-        changed = await reconcile_streak(user, "Europe/Kyiv", goal)
+        changed = await reconcile_streak(user, "Europe/Kyiv", goal, "lose")
 
     assert changed is False
 
@@ -115,7 +115,7 @@ async def test_reconcile_catches_up_multiple_days(seeded_user):
 
     user, goal = await _user_and_goal()
     with _patched_today():
-        await reconcile_streak(user, "Europe/Kyiv", goal)
+        await reconcile_streak(user, "Europe/Kyiv", goal, "lose")
 
     user = await User.get(telegram_id=FAKE_TG_USER_ID)
     assert user.current_streak == 2
