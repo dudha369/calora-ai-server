@@ -261,7 +261,7 @@ async def get_user_detail(
     # протухший стрик. profile/goal тут уже под рукой, лишних запросов нет.
     if profile and goal:
         try:
-            await reconcile_streak(user, profile.timezone, goal)
+            await reconcile_streak(user, profile.timezone, goal, profile.goal_type)
         except Exception:
             logger.exception("streak reconcile failed for user %s", user_id)
 
