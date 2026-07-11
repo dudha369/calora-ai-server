@@ -100,6 +100,7 @@ class FoodLogUpdate(BaseModel):
 class BarcodeLogIn(BaseModel):
     log_date: str
     items: list[FoodItemIn]  # одна позиция, посчитанная на фронте из OFF-данных
+    photo_key: Optional[str] = None # обычно внешний URL картинки с OpenFoodFacts
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -245,11 +246,10 @@ async def _create_log_with_items(
 async def create_log_from_barcode(
     body: BarcodeLogIn, user: User = Depends(get_current_user)
 ):
-    """
-    Логирование еды по штрихкоду (OpenFoodFacts).
-    photo_url всегда NULL — фото штрихкода не несёт пищевой информации.
-    """
-    return await _create_log_with_items(user, body.log_date, body.items, photo_key=None)
+    """Логирование еды по штрихкоду (OpenFoodFacts)."""
+    return await _create_log_with_items(
+        user, body.log_date, body.items, photo_key=body.photo_key
+    )
 
 
 @router.post("/analyze")

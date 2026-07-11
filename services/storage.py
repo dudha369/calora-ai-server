@@ -198,9 +198,14 @@ async def upload_food_photo(
 async def get_photo_url(object_key: Optional[str]) -> Optional[str]:
     """
     По ключу из БД генерирует presigned URL действительный 24 часа.
-    Если ключ None или B2 не настроен — возвращает None.
+    Если это уже готовый внешний URL (например, картинка с OpenFoodFacts) —
+    возвращаем как есть, без похода в B2.
     """
-    if not object_key or not _is_configured():
+    if not object_key:
+        return None
+    if object_key.startswith("http://") or object_key.startswith("https://"):
+        return object_key
+    if not _is_configured():
         return None
     try:
         return await asyncio.to_thread(_sync_presign, object_key)
@@ -210,8 +215,11 @@ async def get_photo_url(object_key: Optional[str]) -> Optional[str]:
 
 
 async def delete_food_photo(object_key: Optional[str]) -> None:
-    """Удаляет одно фото — все версии и hide-маркеры."""
+    """Удаляет одно фото — все версии и hide-маркеры.
+    Внешние URL (например с OpenFoodFacts) в B2 не лежат — их не трогаем."""
     if not object_key or not _is_configured():
+        return
+    if object_key.startswith("http://") or object_key.startswith("https://"):
         return
     try:
         await asyncio.to_thread(_sync_delete, object_key)
@@ -221,7 +229,10 @@ async def delete_food_photo(object_key: Optional[str]) -> None:
 
 async def delete_food_photos(object_keys: list[str]) -> None:
     """Батч-удаление всех фото пользователя (при удалении аккаунта)."""
-    keys = [k for k in object_keys if k]
+    keys = [
+        k for k in object_keys
+        if k and not k.startswith("http://") and not k.startswith("https://")
+    ]
     if not keys or not _is_configured():
         return
     try:
