@@ -64,6 +64,7 @@ TORTOISE_ORM = {
                 "db.models.water_log",
                 "db.models.quest",
                 "db.models.ai_tip",
+                "db.models.streak_day",
                 "db.models.app_settings",
                 "db.models.broadcast",
                 "aerich.models",

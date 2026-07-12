@@ -10,3 +10,4 @@ from .quest import Quest, QuestSchema
 from .ai_tip import AiTip, AiTipSchema
 from .app_settings import AppSettings
 from .broadcast import Broadcast, BroadcastSchema
+from .streak_day import StreakDay, StreakDaySchema

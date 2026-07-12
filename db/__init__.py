@@ -21,4 +21,6 @@ from .models import (
     AppSettings,
     Broadcast,
     BroadcastSchema,
+    StreakDay,
+    StreakDaySchema,
 )

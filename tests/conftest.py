@@ -40,6 +40,7 @@ TORTOISE_TEST_CONFIG = {
                 "db.models.food_log",
                 "db.models.food_item",
                 "db.models.water_log",
+"db.models.streak_day",
                 "db.models.quest",
                 "db.models.ai_tip",
             ],

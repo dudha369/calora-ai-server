@@ -155,33 +155,37 @@ async def test_get_food_empty_date(client: AsyncClient, seeded_user):
 
 @pytest.mark.asyncio
 @patch("api.food.delete_food_photo", new_callable=AsyncMock)
-async def test_delete_food_log_with_photo(mock_del, client: AsyncClient, seeded_user):
-    """DELETE /api/food/{id} also deletes the photo from B2."""
-    resp = await client.post(
-        "/api/food/log",
-        json={
-            "log_date": "2026-06-12",
-            "items": [
-                {
-                    "food_name": "Тест",
-                    "portion_g": 100,
-                    "calories": 100,
-                    "protein_g": 5,
-                    "fat_g": 3,
-                    "carbs_g": 10,
-                }
-            ],
-            "photo_key": "food/123456789/abc123.jpg",
-        },
-    )
-    log_id = resp.json()["log"]["id"]
+async def test_delete_shared_photo_keeps_file_while_referenced(
+    mock_del, client: AsyncClient, seeded_user
+):
+    """Удаление одной из двух записей с общим photo_key не трогает B2,
+    пока жива вторая ссылка."""
+    photo_key = "food/123456789/shared.jpg"
 
-    resp = await client.delete(f"/api/food/{log_id}")
+    async def make_log():
+        resp = await client.post(
+            "/api/food/log",
+            json={
+                "log_date": "2026-06-12",
+                "items": [{
+                    "food_name": "Тест", "portion_g": 100, "calories": 100,
+                    "protein_g": 5, "fat_g": 3, "carbs_g": 10,
+                }],
+                "photo_key": photo_key,
+            },
+        )
+        return resp.json()["log"]["id"]
+
+    log_a = await make_log()
+    log_b = await make_log()
+
+    resp = await client.delete(f"/api/food/{log_a}")
     assert resp.status_code == 200
-    assert resp.json()["deleted"] is True
+    mock_del.assert_not_called()  # фото ещё используется log_b
 
-    # Verify B2 photo deletion was called
-    mock_del.assert_called_once_with("food/123456789/abc123.jpg")
+    resp = await client.delete(f"/api/food/{log_b}")
+    assert resp.status_code == 200
+    mock_del.assert_called_once_with(photo_key)  # последняя ссылка ушла
 
 
 @pytest.mark.asyncio

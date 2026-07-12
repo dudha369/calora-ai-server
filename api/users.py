@@ -25,6 +25,7 @@ from services.streaks import (
     is_streak_active_today,
     get_today_progress,
     restore_streak,
+    get_week_history,
 )
 
 from config import config
@@ -119,6 +120,8 @@ async def get_streak(user: User = Depends(get_current_user)):
             "streak_restores_available": user.streak_restores_available,
             "can_restore": False,
             "today_progress": None,
+            "goal_type": None,
+            "week_history": [],
         }
 
     try:
@@ -129,6 +132,7 @@ async def get_streak(user: User = Depends(get_current_user)):
     today_progress = await get_today_progress(
         user.telegram_id, profile.timezone, goal, profile.goal_type
     )
+    week_history = await get_week_history(user.telegram_id, profile.timezone)
 
     return {
         "current_streak": user.current_streak,
@@ -140,6 +144,8 @@ async def get_streak(user: User = Depends(get_current_user)):
             user.streak_before_break is not None and user.streak_restores_available > 0
         ),
         "today_progress": today_progress,
+        "goal_type": profile.goal_type,
+        "week_history": week_history,
     }
 
 

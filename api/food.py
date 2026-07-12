@@ -471,7 +471,17 @@ async def delete_log(log_id: int, user: User = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Log not found")
 
     if food_log.photo_url:
-        await delete_food_photo(food_log.photo_url)
+        # Ключ в B2 мог быть скопирован в другую запись через
+        # copy_photo_from_log_id (см. CopyMealSheet / create_log).
+        # Физически удаляем файл из B2 только если ни одна ДРУГАЯ
+        # запись пользователя больше на него не ссылается — иначе
+        # просто отвязываем текущий лог, не трогая storage.
+        still_referenced = await FoodLog.filter(
+            user_id=user.telegram_id, photo_url=food_log.photo_url
+        ).exclude(id=log_id).exists()
+
+        if not still_referenced:
+            await delete_food_photo(food_log.photo_url)
 
     # Удаляем автоматически созданные записи воды, привязанные к этой еде.
     # Ручные записи (food_log_id=NULL) остаются нетронутыми.
