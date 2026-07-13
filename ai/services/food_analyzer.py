@@ -41,8 +41,15 @@ The user sends a photo of food and/or drinks, optionally with a short
 clarifying note (portion size, ingredients, "no sugar", etc.) — if a note is
 present, trust it over your own visual guess when the two conflict.
 
-Identify ALL dishes, ingredients AND beverages visible. Estimate portion
-sizes by comparing to reference objects (plate, cup, fork, hand) if visible.
+Identify ONLY the dishes, ingredients AND beverages that are ACTUALLY VISIBLE
+in the photo. Estimate portion sizes by comparing to reference objects
+(plate, cup, fork, hand) if visible.
+
+CRITICAL — do not hallucinate: never add an item that is not shown in the
+photo, even if it would typically accompany the visible food (e.g. do not
+add a cup of tea/coffee/water unless a cup or glass is actually visible).
+If you are uncertain whether something is present, leave it out rather than
+guessing it into existence.
 
 For EVERY item (food or drink) also estimate water_ml — the water-equivalent
 hydration it contributes, in millilitres. Use these typical water fractions
@@ -54,7 +61,7 @@ water_ml = liquid_volume_ml * water_fraction, rounded to the nearest 10.
 
 Return ONLY valid JSON, no markdown, no extra text:
 {{
-  "meal_name": "Overall meal name in {language}",
+  "meal_name": "Name in {language}",
   "dishes": [
     {{
       "name": "Dish or drink name in {language}",
@@ -84,16 +91,24 @@ Return ONLY valid JSON, no markdown, no extra text:
 
 Rules:
 - Return ALL text values (meal_name, dish names) in {language}. Do not add translations in parentheses.
-- meal_name: a short, recognisable label for the whole meal.
-  - Single dish → meal_name equals that dish's name.
-  - Multiple dishes → a concise generalising name (e.g. "Lunch set", "Big Mac Meal", "Breakfast combo").
+- meal_name is the name the user will actually see in their food log — not a category:
+  - Single dish/drink → meal_name MUST equal that one dish's name, verbatim. Never generalise
+    a single item into a category ("snack", "breakfast", "dessert", etc.) — e.g. a photo of
+    just cookies must get meal_name = the cookies' name, not "snack".
+  - Multiple dishes → meal_name is a short, concrete description of what is actually on the
+    plate (you may combine the dish names, e.g. "Vermicelli, nuggets and salad"). Only use a
+    natural set-meal name (e.g. a specific fast-food combo name) if the dishes truly form one
+    recognisable, branded combo — never invent generic meal-time labels like "Lunch set",
+    "Breakfast combo", "Комплексный обед" etc. You cannot know the time of day or the user's
+    intent from a photo alone, so never guess it.
 - Order dishes logically: soups/starters → main courses → sides → salads → desserts → drinks.
 - If confidence < 0.6 for any dish, set ask_user=true and explain in portion_note
 - Always use grams for portions (liquids: use the ml-equivalent in grams), float for macros
 - fiber_g = dietary fiber estimate; sugar_g = total sugars (including natural)
 - total.water_ml MUST equal the sum of all dishes' water_ml
 - If the photo has no food or drink, return {{"error": "no_food_detected"}}
-- Never refuse. Always attempt estimation even for complex or mixed dishes.
+- Never refuse. Always attempt estimation even for complex or mixed dishes — but only for
+  what is actually visible in the photo.
 """
 
 

@@ -92,9 +92,17 @@ class FoodLogIn(BaseModel):
 
 
 class FoodLogUpdate(BaseModel):
-    """Тело PUT /api/food/{log_id} — полная замена items."""
+    """Тело PUT /api/food/{log_id} — полная замена items.
+
+    meal_name опционален и применяется только когда после правки остаётся
+    больше одного item — см. update_log(): если остаётся ровно один item,
+    meal_name принудительно становится названием этого item'а (та же логика,
+    что и в промпте ИИ и в CopyMealSheet на фронте), независимо от того, что
+    было передано в этом поле.
+    """
 
     items: list[FoodItemIn]
+    meal_name: Optional[str] = None
 
 
 class BarcodeLogIn(BaseModel):
@@ -362,6 +370,18 @@ async def update_log(
         )
 
     await _recalc_totals(food_log)
+
+    # Если после правки в записи остался ровно один компонент — meal_name
+    # должен стать названием этого единственного продукта, а не оставаться
+    # тем, что ИИ придумал для изначально многосоставного приёма пищи.
+    # Если items несколько — обновляем meal_name только если фронт явно его
+    # прислал, иначе не трогаем то, что уже сохранено.
+    if len(body.items) == 1:
+        new_meal_name = body.items[0].food_name
+        await FoodLog.filter(id=log_id).update(meal_name=new_meal_name)
+    elif body.meal_name is not None:
+        await FoodLog.filter(id=log_id).update(meal_name=body.meal_name)
+
     await food_log.refresh_from_db()
 
     # Пересобираем авто-воду записи под новые значения.
