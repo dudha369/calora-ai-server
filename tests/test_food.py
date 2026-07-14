@@ -167,10 +167,16 @@ async def test_delete_shared_photo_keeps_file_while_referenced(
             "/api/food/log",
             json={
                 "log_date": "2026-06-12",
-                "items": [{
-                    "food_name": "Тест", "portion_g": 100, "calories": 100,
-                    "protein_g": 5, "fat_g": 3, "carbs_g": 10,
-                }],
+                "items": [
+                    {
+                        "food_name": "Тест",
+                        "portion_g": 100,
+                        "calories": 100,
+                        "protein_g": 5,
+                        "fat_g": 3,
+                        "carbs_g": 10,
+                    }
+                ],
                 "photo_key": photo_key,
             },
         )

@@ -221,7 +221,9 @@ async def list_users(
                 "max_streak": u.max_streak,
                 "quests_completed": u.quests_completed,
                 "created_at": u.created_at.isoformat(),
-                "last_active_at": u.last_active_at.isoformat() if u.last_active_at else None,
+                "last_active_at": (
+                    u.last_active_at.isoformat() if u.last_active_at else None
+                ),
                 "onboarded": u.telegram_id in onboarded_ids_set,
                 "in_whitelist": u.telegram_id in whitelist_ids,
             }
@@ -322,7 +324,9 @@ async def get_user_detail(
             "max_streak": user.max_streak,
             "quests_completed": user.quests_completed,
             "created_at": user.created_at.isoformat(),
-            "last_active_at": user.last_active_at.isoformat() if user.last_active_at else None,
+            "last_active_at": (
+                user.last_active_at.isoformat() if user.last_active_at else None
+            ),
             "in_whitelist": user.telegram_id in whitelist_ids,
         },
         "profile": profile_data,

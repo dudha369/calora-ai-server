@@ -230,7 +230,8 @@ async def delete_food_photo(object_key: Optional[str]) -> None:
 async def delete_food_photos(object_keys: list[str]) -> None:
     """Батч-удаление всех фото пользователя (при удалении аккаунта)."""
     keys = [
-        k for k in object_keys
+        k
+        for k in object_keys
         if k and not k.startswith("http://") and not k.startswith("https://")
     ]
     if not keys or not _is_configured():

@@ -99,16 +99,22 @@ class FoodLogUpdate(BaseModel):
     meal_name принудительно становится названием этого item'а (та же логика,
     что и в промпте ИИ и в CopyMealSheet на фронте), независимо от того, что
     было передано в этом поле.
+
+    remove_photo — открепить фото от записи. Как и delete_log, физически
+    удаляет объект из B2 только если ни одна ДРУГАЯ запись пользователя
+    на него больше не ссылается (общее фото могло появиться через
+    copy_photo_from_log_id при копировании приёма пищи).
     """
 
     items: list[FoodItemIn]
     meal_name: Optional[str] = None
+    remove_photo: bool = False
 
 
 class BarcodeLogIn(BaseModel):
     log_date: str
     items: list[FoodItemIn]  # одна позиция, посчитанная на фронте из OFF-данных
-    photo_key: Optional[str] = None # обычно внешний URL картинки с OpenFoodFacts
+    photo_key: Optional[str] = None  # обычно внешний URL картинки с OpenFoodFacts
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -382,6 +388,19 @@ async def update_log(
     elif body.meal_name is not None:
         await FoodLog.filter(id=log_id).update(meal_name=body.meal_name)
 
+    # Открепление фото — та же логика reference counting, что в delete_log:
+    # физически удаляем из B2 только если ни одна другая запись на него
+    # больше не ссылается (общий photo_key мог появиться через copy).
+    if body.remove_photo and food_log.photo_url:
+        still_referenced = (
+            await FoodLog.filter(user_id=user.telegram_id, photo_url=food_log.photo_url)
+            .exclude(id=log_id)
+            .exists()
+        )
+        if not still_referenced:
+            await delete_food_photo(food_log.photo_url)
+        await FoodLog.filter(id=log_id).update(photo_url=None)
+
     await food_log.refresh_from_db()
 
     # Пересобираем авто-воду записи под новые значения.
@@ -496,9 +515,11 @@ async def delete_log(log_id: int, user: User = Depends(get_current_user)):
         # Физически удаляем файл из B2 только если ни одна ДРУГАЯ
         # запись пользователя больше на него не ссылается — иначе
         # просто отвязываем текущий лог, не трогая storage.
-        still_referenced = await FoodLog.filter(
-            user_id=user.telegram_id, photo_url=food_log.photo_url
-        ).exclude(id=log_id).exists()
+        still_referenced = (
+            await FoodLog.filter(user_id=user.telegram_id, photo_url=food_log.photo_url)
+            .exclude(id=log_id)
+            .exists()
+        )
 
         if not still_referenced:
             await delete_food_photo(food_log.photo_url)

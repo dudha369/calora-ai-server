@@ -77,7 +77,9 @@ def _maybe_refill_restores(user: User, today: date) -> bool:
     return True
 
 
-async def _day_goal_met(user_id: int, day: date, goal: DailyGoal, goal_type: str) -> bool:
+async def _day_goal_met(
+    user_id: int, day: date, goal: DailyGoal, goal_type: str
+) -> bool:
     """Умная проверка выполнения цели в зависимости от её типа."""
     logs = await FoodLog.filter(user_id=user_id, log_date=day).all()
     if not logs:
@@ -175,7 +177,9 @@ async def get_week_history(user_id: int, tz_name: str, num_days: int = 7) -> lis
 # ─── Core logic ───────────────────────────────────────────────────────────────
 
 
-async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal, goal_type: str) -> bool:
+async def reconcile_streak(
+    user: User, tz_name: str, goal: DailyGoal, goal_type: str
+) -> bool:
     """
     Закрывает все прошедшие дни до сегодняшней локальной даты.
     Вызывается на GET /me и GET /api/users/streak.
@@ -218,7 +222,9 @@ async def reconcile_streak(user: User, tz_name: str, goal: DailyGoal, goal_type:
                 if user.current_streak > 0 and user.streak_before_break is None:
                     user.streak_before_break = user.current_streak
                 user.current_streak = 0
-                await _record_day_result(user.telegram_id, cursor, StreakDay.STATUS_MISSED)
+                await _record_day_result(
+                    user.telegram_id, cursor, StreakDay.STATUS_MISSED
+                )
             cursor += timedelta(days=1)
 
     user.last_streak_check_date = today - timedelta(days=1)
@@ -277,7 +283,9 @@ def is_streak_active_today(user: User, tz_name: str) -> bool:
     return user.last_streak_check_date == local_today(tz_name)
 
 
-async def get_today_progress(user_id: int, tz_name: str, goal: DailyGoal, goal_type: str) -> dict:
+async def get_today_progress(
+    user_id: int, tz_name: str, goal: DailyGoal, goal_type: str
+) -> dict:
     today = local_today(tz_name)
     logs = await FoodLog.filter(user_id=user_id, log_date=today).all()
     calories = sum(log.total_calories for log in logs)
