@@ -11,6 +11,8 @@ from services.streaks import (
     reconcile_streak,
     sync_today_credit_state,
     restore_streak,
+    decline_streak_restore,
+    describe_restore_state,
     MAX_RESTORES_PER_MONTH,
 )
 from tests.conftest import FAKE_TG_USER_ID
@@ -559,3 +561,98 @@ async def test_streak_endpoint_shows_can_restore_after_break(
 
     assert resp.status_code == 200
     assert resp.json()["can_restore"] is True
+
+
+# ─── Restore window expiry & decline ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_restore_fails_after_window_expires(seeded_user):
+    """Щит нельзя потратить, если 48 часов с момента обрыва уже прошли."""
+    await User.filter(telegram_id=FAKE_TG_USER_ID).update(
+        current_streak=0,
+        streak_before_break=6,
+        streak_broken_at=datetime.now(timezone.utc) - timedelta(hours=49),
+        streak_restores_available=2,
+    )
+
+    user, _ = await _user_and_goal()
+    result = await restore_streak(user, "Europe/Kyiv")
+
+    assert result["ok"] is False
+    assert result["reason"] == "restore_window_expired"
+
+    user = await User.get(telegram_id=FAKE_TG_USER_ID)
+    assert user.current_streak == 0
+    assert user.streak_before_break == 6  # щит не потрачен, эпизод не закрыт
+
+
+@pytest.mark.asyncio
+async def test_restore_succeeds_just_before_window_expires(seeded_user):
+    """На 47-м часу восстановление всё ещё доступно."""
+    await User.filter(telegram_id=FAKE_TG_USER_ID).update(
+        current_streak=0,
+        streak_before_break=6,
+        streak_broken_at=datetime.now(timezone.utc) - timedelta(hours=47),
+        streak_restores_available=2,
+    )
+
+    user, _ = await _user_and_goal()
+    result = await restore_streak(user, "Europe/Kyiv")
+
+    assert result["ok"] is True
+    assert result["restored_to"] == 6
+
+
+def test_describe_restore_state_reflects_expiry():
+    """Чистая функция describe_restore_state не трогает БД и корректно
+    считает can_restore/restore_expired по одним только полям User."""
+    user = User(
+        telegram_id=1,
+        full_name="X",
+        streak_before_break=3,
+        streak_broken_at=datetime.now(timezone.utc) - timedelta(hours=50),
+        streak_restores_available=1,
+    )
+    state = describe_restore_state(user)
+    assert state["can_restore"] is False
+    assert state["restore_expired"] is True
+    assert state["lost_streak_value"] == 3
+
+
+@pytest.mark.asyncio
+async def test_decline_streak_restore_clears_break(seeded_user):
+    """Отказ от восстановления закрывает эпизод без траты щита."""
+    await User.filter(telegram_id=FAKE_TG_USER_ID).update(
+        current_streak=0,
+        streak_before_break=4,
+        streak_broken_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        streak_restores_available=3,
+    )
+
+    user, _ = await _user_and_goal()
+    result = await decline_streak_restore(user)
+
+    assert result["ok"] is True
+    user = await User.get(telegram_id=FAKE_TG_USER_ID)
+    assert user.streak_before_break is None
+    assert user.streak_broken_at is None
+    assert user.streak_restores_available == 3  # щит не потрачен
+
+
+@pytest.mark.asyncio
+async def test_decline_streak_restore_endpoint(client: AsyncClient, seeded_user):
+    await User.filter(telegram_id=FAKE_TG_USER_ID).update(
+        current_streak=0,
+        streak_before_break=4,
+        streak_broken_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+
+    resp = await client.post("/api/users/streak/decline")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    resp = await client.get("/api/users/streak")
+    data = resp.json()
+    assert data["lost_streak_value"] is None
+    assert data["can_restore"] is False

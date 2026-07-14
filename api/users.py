@@ -25,6 +25,8 @@ from services.streaks import (
     is_streak_active_today,
     get_today_progress,
     restore_streak,
+    decline_streak_restore,
+    describe_restore_state,
     get_week_history,
 )
 
@@ -118,7 +120,7 @@ async def get_streak(user: User = Depends(get_current_user)):
             "max_streak": user.max_streak,
             "streak_active_today": False,
             "streak_restores_available": user.streak_restores_available,
-            "can_restore": False,
+            **describe_restore_state(user),
             "today_progress": None,
             "goal_type": None,
             "week_history": [],
@@ -139,10 +141,9 @@ async def get_streak(user: User = Depends(get_current_user)):
         "max_streak": user.max_streak,
         "streak_active_today": is_streak_active_today(user, profile.timezone),
         "streak_restores_available": user.streak_restores_available,
-        # can_restore вычисляется сервером — клиент не видит streak_before_break
-        "can_restore": (
-            user.streak_before_break is not None and user.streak_restores_available > 0
-        ),
+        # can_restore/lost_streak_value/restore_deadline/restore_expired —
+        # чистая функция от полей User, см. services/streaks.describe_restore_state
+        **describe_restore_state(user),
         "today_progress": today_progress,
         "goal_type": profile.goal_type,
         "week_history": week_history,
@@ -155,6 +156,7 @@ async def restore_user_streak(user: User = Depends(get_current_user)):
     POST /api/users/streak/restore — ручное восстановление серии.
     400 — нечего восстанавливать (streak_before_break is None).
     409 — нет зарядов (streak_restores_available == 0).
+    410 — 48-часовое окно восстановления истекло.
     """
     profile = await UserProfile.get_or_none(user_id=user.telegram_id)
     if not profile:
@@ -166,9 +168,26 @@ async def restore_user_streak(user: User = Depends(get_current_user)):
     result = await restore_streak(user, profile.timezone)
 
     if not result["ok"]:
-        code = 409 if result["reason"] == "no_restores_available" else 400
+        code = {
+            "no_restores_available": 409,
+            "restore_window_expired": 410,
+        }.get(result["reason"], 400)
         raise HTTPException(status_code=code, detail=result["reason"])
 
+    return result
+
+
+@router.post("/streak/decline")
+async def decline_user_streak_restore(user: User = Depends(get_current_user)):
+    """
+    POST /api/users/streak/decline — отказ от восстановления сгоревшей
+    серии. В отличие от /restore ничего не тратит: просто закрывает текущий
+    эпизод потери, разрешая начать новую серию с чистого листа.
+    400 — нечего отклонять (уже закрыто/не было обрыва).
+    """
+    result = await decline_streak_restore(user)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["reason"])
     return result
 
 

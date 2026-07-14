@@ -14,6 +14,14 @@
   • Потерял серию (любое кол-во щитов), начал новую → всегда 3 щита
   • Новый месяц, серия продолжается → всегда 3 щита
 
+Окно восстановления (RESTORE_WINDOW_HOURS = 48):
+  Как только серия обрывается, у пользователя есть 48 часов, отсчитываемых
+  от streak_broken_at (локальная полночь дня после первого пропущенного дня),
+  чтобы восстановить её щитом. По истечении окна restore_streak отказывает
+  без траты щита — серия потеряна безвозвратно. Пользователь также может
+  явно отказаться от восстановления через decline_streak_restore — это
+  закрывает эпизод потери сразу, тоже без траты щита.
+
 Критерий "успешного дня":
   total_calories за день попадает в ±10% от DailyGoal.calories
   (с нюансами по goal_type — см. _day_goal_met).
@@ -22,7 +30,9 @@
   last_streak_check_date    — последняя дата, за которую серия учтена.
   streak_before_break       — значение серии до первого обрыва текущего
                               эпизода. Устанавливается reconcile, сбрасывается
-                              при restore или начале новой серии.
+                              при restore, decline или начале новой серии.
+  streak_broken_at          — UTC-момент начала окна восстановления для
+                              текущего эпизода потери (см. выше).
   streak_restores_available — остаток щитов.
   streak_restores_reset_at  — первое число месяца, когда щиты выданы.
 
@@ -43,6 +53,7 @@ CALORIE_TOLERANCE_PCT = 0.10
 STARVATION_TOLERANCE_PCT = 0.30
 MAX_BACKFILL_DAYS = 365
 MAX_RESTORES_PER_MONTH = 3
+RESTORE_WINDOW_HOURS = 48
 
 
 # ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -60,6 +71,32 @@ def local_today(tz_name: str) -> date:
         logger.warning("Unknown timezone '%s', falling back to UTC", tz_name)
         tz = ZoneInfo("UTC")
     return datetime.now(timezone.utc).astimezone(tz).date()
+
+
+def _local_midnight_utc(d: date, tz_name: str) -> datetime:
+    """Локальная полночь дня d, переведённая в UTC. Используется как момент
+    начала окна восстановления — считается один раз, при детекте обрыва,
+    и не зависит от того, когда именно пользователь откроет приложение."""
+    try:
+        tz = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("UTC")
+    return datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc)
+
+
+def _is_restore_expired(user: User) -> bool:
+    """
+    Истекло ли 48-часовое окно восстановления.
+
+    Если streak_broken_at не проставлен (легаси-данные до этой фичи, либо
+    поле выставлено вручную в тестах без метки времени) — считаем окно ещё
+    открытым, чтобы не ломать восстановление задним числом.
+    """
+    if user.streak_broken_at is None:
+        return False
+    return datetime.now(timezone.utc) > user.streak_broken_at + timedelta(
+        hours=RESTORE_WINDOW_HOURS
+    )
 
 
 def _maybe_refill_restores(user: User, today: date) -> bool:
@@ -208,6 +245,7 @@ async def reconcile_streak(
         )
         user.current_streak = 0
         user.streak_before_break = None
+        user.streak_broken_at = None
     else:
         cursor = last_checked + timedelta(days=1)
         while cursor < today:
@@ -217,10 +255,16 @@ async def reconcile_streak(
                 user.max_streak = max(user.max_streak, user.current_streak)
                 if user.streak_before_break is not None:
                     user.streak_before_break = None
+                    user.streak_broken_at = None
                 await _record_day_result(user.telegram_id, cursor, StreakDay.STATUS_MET)
             else:
                 if user.current_streak > 0 and user.streak_before_break is None:
                     user.streak_before_break = user.current_streak
+                    # Окно восстановления открывается с локальной полуночи
+                    # СЛЕДУЮЩЕГО дня — именно тогда серия визуально стала 0.
+                    user.streak_broken_at = _local_midnight_utc(
+                        cursor + timedelta(days=1), tz_name
+                    )
                 user.current_streak = 0
                 await _record_day_result(
                     user.telegram_id, cursor, StreakDay.STATUS_MISSED
@@ -258,6 +302,7 @@ async def sync_today_credit_state(
         user.max_streak = max(user.max_streak, user.current_streak)
         user.last_streak_check_date = today
         user.streak_before_break = None
+        user.streak_broken_at = None
 
         if starting_fresh:
             # Новая серия — всегда полный комплект щитов.
@@ -281,6 +326,35 @@ async def sync_today_credit_state(
 
 def is_streak_active_today(user: User, tz_name: str) -> bool:
     return user.last_streak_check_date == local_today(tz_name)
+
+
+def describe_restore_state(user: User) -> dict:
+    """
+    Чистая функция от полей User: можно ли ещё восстановить потерянную
+    серию, до какого момента, и истекло ли окно. Не трогает БД — безопасно
+    звать из любого read-only эндпоинта без дополнительных запросов.
+    """
+    if user.streak_before_break is None:
+        return {
+            "can_restore": False,
+            "lost_streak_value": None,
+            "restore_deadline": None,
+            "restore_expired": False,
+        }
+
+    deadline = (
+        user.streak_broken_at + timedelta(hours=RESTORE_WINDOW_HOURS)
+        if user.streak_broken_at is not None
+        else None
+    )
+    expired = _is_restore_expired(user)
+
+    return {
+        "can_restore": user.streak_restores_available > 0 and not expired,
+        "lost_streak_value": user.streak_before_break,
+        "restore_deadline": deadline.isoformat() if deadline else None,
+        "restore_expired": expired,
+    }
 
 
 async def get_today_progress(
@@ -329,12 +403,15 @@ async def get_today_progress(
     }
 
 
-# ─── Restore ─────────────────────────────────────────────────────────────────
+# ─── Restore / Decline ─────────────────────────────────────────────────────────
 
 
 async def restore_streak(user: User, tz_name: str) -> dict:
     """
-    Восстанавливает серию после разрыва, расходуя один щит.
+    Восстанавливает серию после разрыва, расходуя один щит. Действует
+    только в течение RESTORE_WINDOW_HOURS часов с момента обрыва
+    (user.streak_broken_at) — по истечении окна серия считается
+    безвозвратно потерянной, щит не тратится.
 
     Задним числом переводит подряд идущие 'missed' дни (StreakDay) в
     'restored' — именно эту цепочку и простил щит. Перед проверкой
@@ -348,12 +425,16 @@ async def restore_streak(user: User, tz_name: str) -> dict:
     if user.streak_before_break is None:
         return {"ok": False, "reason": "no_break_to_restore"}
 
+    if _is_restore_expired(user):
+        return {"ok": False, "reason": "restore_window_expired"}
+
     if user.streak_restores_available <= 0:
         return {"ok": False, "reason": "no_restores_available"}
 
     restored_to = user.streak_before_break
     user.current_streak = restored_to
     user.streak_before_break = None
+    user.streak_broken_at = None
     user.last_streak_check_date = today - timedelta(days=1)
     user.streak_restores_available -= 1
 
@@ -366,3 +447,20 @@ async def restore_streak(user: User, tz_name: str) -> dict:
         "restored_to": restored_to,
         "restores_remaining": user.streak_restores_available,
     }
+
+
+async def decline_streak_restore(user: User) -> dict:
+    """
+    Явный отказ пользователя от восстановления серии — закрывает текущий
+    эпизод потери без траты щита, чтобы следующий выполненный день начинал
+    полностью новую серию (со свежим комплектом щитов — см. starting_fresh
+    в sync_today_credit_state), а UI перестал предлагать восстановление
+    уже отпущенной серии.
+    """
+    if user.streak_before_break is None:
+        return {"ok": False, "reason": "no_break_to_restore"}
+
+    user.streak_before_break = None
+    user.streak_broken_at = None
+    await user.save()
+    return {"ok": True}
