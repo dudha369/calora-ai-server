@@ -28,6 +28,7 @@ from services.streaks import (
     decline_streak_restore,
     describe_restore_state,
     get_week_history,
+    MAX_RESTORES_PER_MONTH,
 )
 
 from config import config
@@ -120,6 +121,7 @@ async def get_streak(user: User = Depends(get_current_user)):
             "max_streak": user.max_streak,
             "streak_active_today": False,
             "streak_restores_available": user.streak_restores_available,
+            "max_restores_per_month": MAX_RESTORES_PER_MONTH,
             **describe_restore_state(user),
             "today_progress": None,
             "goal_type": None,
@@ -141,8 +143,7 @@ async def get_streak(user: User = Depends(get_current_user)):
         "max_streak": user.max_streak,
         "streak_active_today": is_streak_active_today(user, profile.timezone),
         "streak_restores_available": user.streak_restores_available,
-        # can_restore/lost_streak_value/restore_deadline/restore_expired —
-        # чистая функция от полей User, см. services/streaks.describe_restore_state
+        "max_restores_per_month": MAX_RESTORES_PER_MONTH,
         **describe_restore_state(user),
         "today_progress": today_progress,
         "goal_type": profile.goal_type,

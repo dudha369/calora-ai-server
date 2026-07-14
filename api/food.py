@@ -420,9 +420,7 @@ async def update_log(
     except Exception:
         logger.exception("streak resync failed for user %s", user.telegram_id)
 
-    items_data = await FoodItemSchema.from_queryset(
-        FoodItem.filter(food_log_id=log_id)
-    )
+    items_data = await FoodItemSchema.from_queryset(FoodItem.filter(food_log_id=log_id))
     log_dict = (await FoodLogSchema.from_tortoise_orm(food_log)).model_dump()
 
     return {
