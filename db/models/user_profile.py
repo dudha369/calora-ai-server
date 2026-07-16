@@ -20,6 +20,10 @@ class UserProfile(Model):
     units_preference: 'metric' | 'imperial' — предпочтение отображения.
     dietary_restrictions: ['Вегетарианство', 'Без глютена', ...]
     medical_conditions:   ['Сахарный диабет 2 типа', ...]
+    allergens:      структурированный список аллергенов (ключи из OpenFoodFacts,
+                    напр. 'gluten', 'milk', 'tree-nuts') — редактируется на
+                    странице «Питание и здоровье», используется при сканировании
+                    штрихкодов для предупреждения об аллергенах в товаре.
     """
 
     user = fields.OneToOneField(
@@ -41,6 +45,7 @@ class UserProfile(Model):
     dietary_restrictions = fields.JSONField(default=list)
     allergy_note = fields.TextField(null=True)
     medical_conditions = fields.JSONField(default=list)
+    allergens = fields.JSONField(default=list)
 
     timezone = fields.CharField(max_length=40, default="Europe/Kyiv")
     units_preference = fields.CharField(

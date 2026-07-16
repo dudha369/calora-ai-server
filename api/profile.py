@@ -35,6 +35,7 @@ class ProfileIn(BaseModel):
     dietary_restrictions: list[str] = []
     allergy_note: Optional[str] = None
     medical_conditions: list[str] = []
+    allergens: list[str] = []
     timezone: str = "Europe/Kyiv"
     units_preference: str = "metric"  # 'metric' | 'imperial'
 
@@ -90,6 +91,7 @@ async def create_profile(body: ProfileIn, user: User = Depends(get_current_user)
         dietary_restrictions=body.dietary_restrictions,
         allergy_note=body.allergy_note,
         medical_conditions=body.medical_conditions,
+        allergens=body.allergens,
         timezone=body.timezone,
         units_preference=body.units_preference,
     )
@@ -140,6 +142,7 @@ async def update_profile(body: ProfileIn, user: User = Depends(get_current_user)
         dietary_restrictions=body.dietary_restrictions,
         allergy_note=body.allergy_note,
         medical_conditions=body.medical_conditions,
+        allergens=body.allergens,
         timezone=body.timezone,
         units_preference=body.units_preference,
     )
