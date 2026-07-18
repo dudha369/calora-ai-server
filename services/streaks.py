@@ -22,6 +22,12 @@
   явно отказаться от восстановления через decline_streak_restore — это
   закрывает эпизод потери сразу, тоже без траты щита.
 
+  Если пользователь не сделал ни того ни другого (просто не открывал
+  попап, или у него не осталось щитов) — reconcile_streak сама молчаливо
+  закрывает эпизод, как только окно истекает (см. _maybe_clear_expired_break).
+  Иначе streak_before_break/streak_broken_at жили бы в БД бессрочно,
+  хотя describe_restore_state и так вернул бы can_restore=False.
+
 Критерий "успешного дня":
   total_calories за день попадает в ±10% от DailyGoal.calories
   (с нюансами по goal_type — см. _day_goal_met).
@@ -30,7 +36,8 @@
   last_streak_check_date    — последняя дата, за которую серия учтена.
   streak_before_break       — значение серии до первого обрыва текущего
                               эпизода. Устанавливается reconcile, сбрасывается
-                              при restore, decline или начале новой серии.
+                              при restore, decline, истечении окна восстановления
+                              или начале новой серии.
   streak_broken_at          — UTC-момент начала окна восстановления для
                               текущего эпизода потери (см. выше).
   streak_restores_available — остаток щитов.
@@ -39,6 +46,9 @@
 StreakDay — построчная история для StreakPopup (см. db/models/streak_day.py):
   каждый финализированный день получает статус 'met'/'missed', а
   restore_streak задним числом переводит подряд идущие 'missed' в 'restored'.
+  UI (StreakPopup/get_week_history) показывает только последние 7 дней,
+  поэтому записи старше STREAK_DAY_RETENTION_DAYS не хранятся —
+  _record_day_result подчищает их попутно при каждой записи нового дня.
 """
 
 import logging
@@ -54,6 +64,9 @@ STARVATION_TOLERANCE_PCT = 0.30
 MAX_BACKFILL_DAYS = 365
 MAX_RESTORES_PER_MONTH = 3
 RESTORE_WINDOW_HOURS = 48
+# get_week_history всегда смотрит на 7 дней назад — хранить StreakDay дольше
+# не нужно, UI не отображает более раннюю историю (нет календаря/пагинации).
+STREAK_DAY_RETENTION_DAYS = 8
 
 
 # ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -114,6 +127,24 @@ def _maybe_refill_restores(user: User, today: date) -> bool:
     return True
 
 
+def _maybe_clear_expired_break(user: User) -> bool:
+    """
+    Если окно восстановления истекло, а пользователь так и не восстановил
+    и не отклонил серию явно — чистим streak_before_break/broken_at сами,
+    эквивалентно молчаливому decline. Без этого поля жили бы в БД
+    бессрочно: describe_restore_state и так вернул бы can_restore=False,
+    но "есть что восстанавливать" оставалось бы мусором в users.
+    Щит не тратится — как и при явном decline.
+    """
+    if user.streak_before_break is None:
+        return False
+    if not _is_restore_expired(user):
+        return False
+    user.streak_before_break = None
+    user.streak_broken_at = None
+    return True
+
+
 async def _day_goal_met(
     user_id: int, day: date, goal: DailyGoal, goal_type: str
 ) -> bool:
@@ -156,13 +187,24 @@ async def _sync_streak_quest(user: User) -> None:
 
 
 async def _record_day_result(user_id: int, day: date, status: str) -> None:
-    """Апсертит статус дня ('met'/'missed'). Идемпотентно."""
+    """
+    Апсертит статус дня ('met'/'missed'). Идемпотентно.
+
+    Заодно подчищает записи старше STREAK_DAY_RETENTION_DAYS относительно
+    этого дня — get_week_history никогда не смотрит дальше 7 дней назад,
+    поэтому хранить историю дольше смысла нет (см. докстринг модуля).
+    """
     obj, created = await StreakDay.get_or_create(
         user_id=user_id, log_date=day, defaults={"status": status}
     )
     if not created and obj.status != status:
         obj.status = status
         await obj.save()
+
+    await StreakDay.filter(
+        user_id=user_id,
+        log_date__lt=day - timedelta(days=STREAK_DAY_RETENTION_DAYS),
+    ).delete()
 
 
 async def _clear_day_result(user_id: int, day: date) -> None:
@@ -221,19 +263,21 @@ async def reconcile_streak(
     Закрывает все прошедшие дни до сегодняшней локальной даты.
     Вызывается на GET /me и GET /api/users/streak.
 
-    Ежемесячный сброс щитов проверяется здесь же: даже если pending_days == 0
-    (быстрый путь), новый месяц должен отразиться немедленно.
+    Ежемесячный сброс щитов и молчаливое закрытие истёкшего окна
+    восстановления проверяются здесь же: даже если pending_days == 0
+    (быстрый путь), оба события должны отразиться немедленно.
     """
     today = local_today(tz_name)
     refilled = _maybe_refill_restores(user, today)
+    expired_cleared = _maybe_clear_expired_break(user)
 
     last_checked = user.last_streak_check_date or (today - timedelta(days=1))
     pending_days = (today - last_checked).days - 1
 
     if pending_days <= 0:
-        if refilled:
+        if refilled or expired_cleared:
             await user.save()
-        return refilled
+        return refilled or expired_cleared
 
     streak_before = user.current_streak
 
@@ -274,7 +318,7 @@ async def reconcile_streak(
     user.last_streak_check_date = today - timedelta(days=1)
     await _sync_streak_quest(user)
     await user.save()
-    return user.current_streak != streak_before or refilled
+    return user.current_streak != streak_before or refilled or expired_cleared
 
 
 async def sync_today_credit_state(
