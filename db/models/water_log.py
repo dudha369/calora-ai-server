@@ -7,23 +7,26 @@ class WaterLog(Model):
     """
     Запись воды пользователя.
 
-    food_log — nullable FK на FoodLog. Заполняется только для записей,
-               созданных автоматически при логировании еды с напитками.
-               NULL = ручная запись пользователя (через /api/water).
+    food_log — nullable FK на FoodLog. Покрывает оба сценария привязки:
+               • авто-создание при логировании еды с напитками
+                 (см. api/food.py._maybe_log_water);
+               • ручная привязка/отвязка пользователем через
+                 PATCH /api/water/{id} (см. WaterLogModal на фронте).
+               NULL = запись ни к какому приёму пищи не привязана.
+
+    notes — свободная заметка пользователя к записи. Независима от food_log —
+            можно иметь заметку без привязки к еде и наоборот.
+
+    Отображаемое имя записи (когда она привязана к еде) больше не хранится
+    здесь отдельным полем — раньше для этого было source_label, но это был
+    просто снэпшот FoodLog.meal_name/food_name на момент создания, который
+    расходился с реальным блюдом при его переименовании или удалении. Теперь
+    имя всегда берётся напрямую из FoodLog при сериализации (см. api/water.py).
 
     Жизненный цикл:
-      • food_log_id IS NULL  → независима, удаляется только пользователем
-      • food_log_id IS NOT NULL → привязана к еде, удаляется вместе с ней
-
-    source_label — человекочитаемый источник записи:
-      • для авто-записей (food_log_id IS NOT NULL) — название главного блюда,
-        то же самое, что видно в FoodLogCard (log.items[0].food_name);
-      • для ручных записей — необязательная подпись пресета ("☕ Кофе").
-      • NULL — обычная "чистая вода" без уточнения.
-
-    Храним как снэпшот текста, а не считаем на лету джойном к FoodItem:
-    food_log может быть отредактирован/удалён позже, а история потребления
-    воды должна остаться читаемой независимо от текущего состояния лога.
+      • food_log_id IS NULL     → независима, удаляется только пользователем
+      • food_log_id IS NOT NULL → удаляется вместе с этим приёмом пищи
+        (см. delete_log в api/food.py)
     """
 
     user = fields.ForeignKeyField(
@@ -39,7 +42,7 @@ class WaterLog(Model):
     log_date = fields.DateField()
     logged_at = fields.DatetimeField(auto_now_add=True)
     amount_ml = fields.SmallIntField()
-    source_label = fields.CharField(max_length=120, null=True)
+    notes = fields.TextField(null=True)
 
     class Meta:
         table = "water_logs"

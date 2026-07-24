@@ -152,24 +152,15 @@ async def _recalc_totals(food_log: FoodLog) -> None:
     )
 
 
-def _primary_water_source_label(items: list[FoodItemIn]) -> str:
-    """
-    Название "главного" блюда лога — то же самое, что показывает
-    FoodLogCard как основной заголовок (log.items[0].food_name).
-    Используем его же для WaterLog.source_label, чтобы у пользователя
-    не было двух разных названий одного приёма пищи в разных экранах.
-    """
-    return items[0].food_name if items else "Приём пищи"
-
-
 async def _maybe_log_water(
     user: User,
     log_date: date,
     water_ml: int,
     food_log_id: int,
-    source_label: Optional[str] = None,
 ) -> None:
-    """Создаёт WaterLog привязанный к FoodLog, с подписью источника."""
+    """Создаёт WaterLog, привязанный к FoodLog. Отображаемое имя записи
+    теперь берётся из самого FoodLog при чтении (см. api/water.py),
+    отдельно хранить его тут больше не нужно."""
     if water_ml <= 0:
         return
     try:
@@ -178,7 +169,6 @@ async def _maybe_log_water(
             log_date=log_date,
             amount_ml=water_ml,
             food_log_id=food_log_id,
-            source_label=source_label,
         )
     except Exception:
         logger.exception("auto water log failed for user %s", user.telegram_id)
@@ -239,7 +229,6 @@ async def _create_log_with_items(
         log_date,
         effective_water_ml,
         food_log_id=food_log.id,
-        source_label=_primary_water_source_label(body_items),
     )
 
     items_data = await FoodItemSchema.from_queryset(
@@ -411,7 +400,6 @@ async def update_log(
         food_log.log_date,
         sum(item.water_ml for item in body.items),
         food_log_id=log_id,
-        source_label=_primary_water_source_label(body.items),
     )
 
     # Изменение калорий задним числом может повлиять на дневную цель
