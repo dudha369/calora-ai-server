@@ -28,11 +28,12 @@ class WaterIn(BaseModel):
 class WaterUpdate(BaseModel):
     """
     PATCH-тело: любое поле, ОТСУТСТВУЮЩЕЕ в запросе, не трогается
-    (см. model_dump(exclude_unset=True) ниже). Явный null у поля,
-    наоборот, применяется — так notes=null очищает заметку,
-    а food_log_id=null отвязывает запись от еды.
+    (см. model_dump(exclude_unset=True) ниже). Явный null у notes/food_log_id
+    применяется — так notes=null очищает заметку, а food_log_id=null
+    отвязывает запись от еды.
     """
 
+    amount_ml: Optional[int] = None
     notes: Optional[str] = None
     food_log_id: Optional[int] = None
 
