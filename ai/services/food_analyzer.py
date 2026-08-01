@@ -1,5 +1,6 @@
 """
-Анализ фото еды и напитков → КБЖУ + клетчатка + сахар + объём воды через Gemini.
+Анализ фото и текстовых описаний еды и напитков → КБЖУ + клетчатка + сахар +
+объём воды через Gemini.
 
 Каждое блюдо (включая напитки) получает поле water_ml — оценку гидратации.
 Для твёрдой еды это обычно 0, для напитков/супов — оценка по типичной доле
@@ -14,11 +15,16 @@ notes — необязательное уточнение, которое пол
 когда модель раньше могла просто "поверить" пользователю и придумать
 блюдо, которого на фото физически не видно.
 
+analyze_food_text — тот же контракт, но без фото вообще: пользователь
+просто описывает, что съел, текстом (см. QuickActions → "Описать блюдо").
+Так как нет фото для проверки, промпт просит модель занижать confidence
+и чаще выставлять ask_user, если описание оставляет реальную неоднозначность.
+
 language — язык приложения пользователя (из User.language_code). Все названия
 блюд возвращаются на этом языке.
 """
 
-from ai.gemini import analyze_image
+from ai.gemini import analyze_image, send_text
 
 from typing import Optional
 
@@ -143,11 +149,76 @@ Rules:
   for what is actually visible in the photo, and only when the photo itself is usable.
 """
 
+TEXT_FOOD_PROMPT_TEMPLATE = """
+You are a precise nutrition analyst for a calorie and hydration tracking app.
+
+The user describes, in free text, what they ate or drank — there is no photo.
+Estimate the dishes, portions and macros from the description alone, using
+typical serving sizes and standard nutritional values for the named foods.
+
+Rules:
+- Identify every distinct dish/drink mentioned. Do not invent items that
+  weren't described, even implied ones (don't add a drink just because a
+  meal "usually" comes with one).
+- If the description is too vague to identify any food at all (e.g. empty,
+  gibberish, or clearly not about food), return {{"error": "no_food_detected"}}.
+- Estimate portion_g using the description's own quantities if given
+  ("200g", "a bowl", "2 slices"); otherwise assume a typical serving size.
+- For EVERY item estimate water_ml the same way as for a photo: dry solid
+  foods → 0, drinks/soups use typical water fractions (water/tea/coffee ~98%,
+  milk ~87%, juice ~88%, soda ~89%, soup ~92%, beer/wine ~90-95%).
+- Because there is no photo to verify against, confidence should generally be
+  lower than photo-based analysis — cap it at 0.75, and set ask_user=true with
+  a clarifying portion_note whenever the description leaves real ambiguity
+  about quantity or ingredients.
+
+Return ONLY valid JSON, no markdown, no extra text — same shape as photo analysis:
+{{
+  "meal_name": "Name in {language}",
+  "dishes": [
+    {{
+      "name": "Dish or drink name in {language}",
+      "portion_g": 200,
+      "calories": 350,
+      "protein_g": 25.0,
+      "fat_g": 12.0,
+      "carbs_g": 30.0,
+      "fiber_g": 4.0,
+      "sugar_g": 5.0,
+      "water_ml": 0,
+      "confidence": 0.7
+    }}
+  ],
+  "total": {{
+    "calories": 350,
+    "protein_g": 25.0,
+    "fat_g": 12.0,
+    "carbs_g": 30.0,
+    "fiber_g": 4.0,
+    "sugar_g": 5.0,
+    "water_ml": 0
+  }},
+  "portion_note": "Estimated from description, no photo to verify against",
+  "ask_user": false
+}}
+
+Same meal_name rules as usual: for a single dish/drink, meal_name MUST equal
+that dish's name verbatim — never a category like "breakfast" or "snack".
+For multiple dishes, meal_name is a short concrete description of what was
+described (you may combine dish names). Return ALL text in {language}.
+"""
+
 
 def _build_prompt(language_code: str) -> str:
-    """Подставляет язык в шаблон промпта."""
+    """Подставляет язык в шаблон промпта фото-анализа."""
     lang = _LANG_NAMES.get(language_code, language_code.capitalize())
     return FOOD_PROMPT_TEMPLATE.format(language=lang)
+
+
+def _build_text_prompt(language_code: str) -> str:
+    """Подставляет язык в шаблон промпта текстового анализа."""
+    lang = _LANG_NAMES.get(language_code, language_code.capitalize())
+    return TEXT_FOOD_PROMPT_TEMPLATE.format(language=lang)
 
 
 async def analyze_food_photo(
@@ -166,3 +237,13 @@ async def analyze_food_photo(
     """
     prompt = _build_prompt(language)
     return await analyze_image(prompt, image_bytes, mime_type, user_note=notes)
+
+
+async def analyze_food_text(description: str, language: str = "en") -> dict:
+    """
+    Тот же контракт, что и analyze_food_photo (meal_name, dishes[], total,
+    portion_note, ask_user), но источник — текстовое описание пользователя,
+    без фото. Переиспользует send_text (JSON-режим), т.к. изображение не нужно.
+    """
+    prompt = _build_text_prompt(language)
+    return await send_text(prompt, description)

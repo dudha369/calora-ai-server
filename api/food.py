@@ -24,7 +24,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .utils import auth, get_current_user, check_rate_limit, parse_date
 from db import (
@@ -38,7 +38,7 @@ from db import (
     WaterLog,
 )
 from ai.gemini import GeminiUnavailableError
-from ai.services.food_analyzer import analyze_food_photo
+from ai.services.food_analyzer import analyze_food_photo, analyze_food_text
 from services.storage import upload_food_photo, get_photo_url, delete_food_photo
 from services.streaks import sync_today_credit_state
 
@@ -306,6 +306,37 @@ async def analyze_photo(
         raise HTTPException(status_code=422, detail=result["error"])
 
     return {**result, "photo_key": photo_key}
+
+
+MAX_TEXT_DESCRIPTION_LENGTH = 500
+
+
+class FoodTextIn(BaseModel):
+    description: str = Field(min_length=1, max_length=MAX_TEXT_DESCRIPTION_LENGTH)
+
+
+@router.post("/analyze-text")
+async def analyze_text(body: FoodTextIn, user: User = Depends(get_current_user)):
+    """Тот же контракт, что /analyze, но без фото — описание блюда текстом."""
+    check_rate_limit(
+        user.telegram_id, bucket="analyze", max_per_minute=MAX_ANALYZE_PER_MINUTE
+    )
+
+    try:
+        result = await analyze_food_text(body.description, language=user.language_code)
+    except GeminiUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="AI model is temporarily overloaded. Please try again in a moment.",
+        )
+    except Exception as exc:
+        logger.error("Text food analysis failed for user %s: %s", user.telegram_id, exc)
+        raise HTTPException(status_code=500, detail="Food analysis failed.")
+
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+
+    return {**result, "photo_key": None}
 
 
 @router.post("/log")
