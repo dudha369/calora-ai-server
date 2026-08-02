@@ -23,4 +23,8 @@ from .models import (
     BroadcastSchema,
     StreakDay,
     StreakDaySchema,
+    FavoriteMeal,
+    FavoriteMealSchema,
+    FavoriteMealItem,
+    FavoriteMealItemSchema,
 )

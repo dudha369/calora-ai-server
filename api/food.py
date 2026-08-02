@@ -23,7 +23,16 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    UploadFile,
+    File,
+    Form,
+    Request,
+    Query,
+)
 from pydantic import BaseModel, Field
 
 from .utils import auth, get_current_user, check_rate_limit, parse_date
@@ -446,6 +455,51 @@ async def update_log(
         "log": {**log_dict, "photo_url": await get_photo_url(food_log.photo_url)},
         "items": [i.model_dump() for i in items_data],
     }
+
+
+@router.get("/search")
+async def search_food_history(
+    q: str = Query(..., min_length=1, max_length=100),
+    user: User = Depends(get_current_user),
+):
+    """
+    Поиск по уже залогированным блюдам пользователя — для быстрого повторного
+    добавления (QuickActions → поиск). По одному результату на уникальное
+    название, самая свежая порция как шаблон.
+    """
+    items = (
+        await FoodItem.filter(
+            food_log__user_id=user.telegram_id, food_name__icontains=q
+        )
+        .order_by("-food_log__logged_at")
+        .limit(50)
+        .all()
+    )
+
+    seen: set[str] = set()
+    results = []
+    for item in items:
+        key = item.food_name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(
+            {
+                "food_name": item.food_name,
+                "portion_g": float(item.portion_g),
+                "calories": item.calories,
+                "protein_g": float(item.protein_g),
+                "fat_g": float(item.fat_g),
+                "carbs_g": float(item.carbs_g),
+                "fiber_g": float(item.fiber_g),
+                "sugar_g": float(item.sugar_g),
+                "water_ml": item.water_ml,
+            }
+        )
+        if len(results) >= 15:
+            break
+
+    return {"results": results}
 
 
 @router.get("/{log_date}")

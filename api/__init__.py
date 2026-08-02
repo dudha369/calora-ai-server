@@ -11,6 +11,7 @@ from . import (
     quests,
     tips,
     stats,
+    favorites,
 )
 
 
@@ -28,5 +29,6 @@ def setup_routers() -> APIRouter:
     router.include_router(quests.router)
     router.include_router(tips.router)
     router.include_router(stats.router)
+    router.include_router(favorites.router)
 
     return router
