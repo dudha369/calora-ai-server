@@ -47,7 +47,11 @@ from db import (
     WaterLog,
 )
 from ai.gemini import GeminiUnavailableError
-from ai.services.food_analyzer import analyze_food_photo, analyze_food_text
+from ai.services.food_analyzer import (
+    analyze_food_photo,
+    analyze_food_text,
+    analyze_food_voice,
+)
 from services.storage import upload_food_photo, get_photo_url, delete_food_photo
 from services.streaks import sync_today_credit_state
 
@@ -332,7 +336,9 @@ async def analyze_text(body: FoodTextIn, user: User = Depends(get_current_user))
     )
 
     try:
-        result = await analyze_food_text(body.description, language=user.language_code)
+        result = await analyze_food_text(
+            body.description, language=user.language_code, user_id=user.telegram_id
+        )
     except GeminiUnavailableError:
         raise HTTPException(
             status_code=503,
@@ -340,6 +346,57 @@ async def analyze_text(body: FoodTextIn, user: User = Depends(get_current_user))
         )
     except Exception as exc:
         logger.error("Text food analysis failed for user %s: %s", user.telegram_id, exc)
+        raise HTTPException(status_code=500, detail="Food analysis failed.")
+
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+
+    return {**result, "photo_key": None}
+
+
+ALLOWED_AUDIO_MIME_TYPES = {"audio/wav", "audio/wave", "audio/x-wav"}
+MAX_AUDIO_SIZE_BYTES = 10 * 1024 * 1024  # голосовые заметки короткие, лимит с запасом
+
+
+@router.post("/analyze-voice")
+async def analyze_voice(
+    file: UploadFile = File(...), user: User = Depends(get_current_user)
+):
+    """Голосовое описание блюда. Фронт всегда шлёт WAV (см. audioToWav.ts на клиенте)."""
+    check_rate_limit(
+        user.telegram_id, bucket="analyze", max_per_minute=MAX_ANALYZE_PER_MINUTE
+    )
+
+    mime_type = file.content_type or "audio/wav"
+    if mime_type not in ALLOWED_AUDIO_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported audio type: {mime_type}. Expected WAV.",
+        )
+
+    audio_bytes = await file.read()
+    if len(audio_bytes) > MAX_AUDIO_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max size: {MAX_AUDIO_SIZE_BYTES // (1024 * 1024)} MB",
+        )
+
+    try:
+        result = await analyze_food_voice(
+            audio_bytes,
+            mime_type="audio/wav",
+            language=user.language_code,
+            user_id=user.telegram_id,
+        )
+    except GeminiUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="AI model is temporarily overloaded. Please try again in a moment.",
+        )
+    except Exception as exc:
+        logger.error(
+            "Voice food analysis failed for user %s: %s", user.telegram_id, exc
+        )
         raise HTTPException(status_code=500, detail="Food analysis failed.")
 
     if "error" in result:

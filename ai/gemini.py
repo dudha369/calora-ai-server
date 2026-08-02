@@ -156,3 +156,27 @@ async def analyze_image(
 
     response = await _with_retry(_make_coro, operation="analyze_image")
     return _parse_json(response.text)
+
+
+async def analyze_audio(
+    system_prompt: str,
+    audio_bytes: bytes,
+    mime_type: str = "audio/wav",
+) -> dict:
+    def _make_coro():
+        return _client.aio.models.generate_content(
+            model=MODEL,
+            contents=[
+                types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                "Listen to this audio and follow the system instructions.",
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.3,
+                max_output_tokens=MAX_OUTPUT_TOKENS_IMAGE,  # dishes[] может быть длинным, как у фото
+                response_mime_type="application/json",
+            ),
+        )
+
+    response = await _with_retry(_make_coro, operation="analyze_audio")
+    return _parse_json(response.text)
