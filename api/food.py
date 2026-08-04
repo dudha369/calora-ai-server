@@ -35,7 +35,7 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 
-from .utils import auth, get_current_user, check_rate_limit, parse_date
+from .utils import get_current_user, check_rate_limit, parse_date
 from db import (
     User,
     FoodLog,
@@ -50,7 +50,7 @@ from ai.gemini import GeminiUnavailableError
 from ai.services.food_analyzer import (
     analyze_food_photo,
     analyze_food_text,
-    analyze_food_voice,
+    transcribe_voice,
 )
 from services.storage import upload_food_photo, get_photo_url, delete_food_photo
 from services.streaks import sync_today_credit_state
@@ -360,12 +360,11 @@ ALLOWED_AUDIO_MIME_TYPES = {"audio/wav", "audio/wave", "audio/x-wav"}
 MAX_AUDIO_SIZE_BYTES = 10 * 1024 * 1024  # голосовые заметки короткие, лимит с запасом
 
 
-@router.post("/analyze-voice")
-async def analyze_voice(
-    file: UploadFile = File(...),
-    language: Optional[str] = Form(None),
-    user: User = Depends(get_current_user),
+@router.post("/transcribe-voice")
+async def transcribe_voice_endpoint(
+    file: UploadFile = File(...), user: User = Depends(get_current_user)
 ):
+    """Голосовая запись → текст. Дальше фронт зовёт /analyze-text с этим текстом."""
     check_rate_limit(
         user.telegram_id, bucket="analyze", max_per_minute=MAX_ANALYZE_PER_MINUTE
     )
@@ -385,12 +384,7 @@ async def analyze_voice(
         )
 
     try:
-        result = await analyze_food_voice(
-            audio_bytes,
-            mime_type="audio/wav",
-            language=language or user.language_code,
-            user_id=user.telegram_id,
-        )
+        transcript = await transcribe_voice(audio_bytes, mime_type="audio/wav")
     except GeminiUnavailableError:
         raise HTTPException(
             status_code=503,
@@ -398,14 +392,11 @@ async def analyze_voice(
         )
     except Exception as exc:
         logger.error(
-            "Voice food analysis failed for user %s: %s", user.telegram_id, exc
+            "Voice transcription failed for user %s: %s", user.telegram_id, exc
         )
-        raise HTTPException(status_code=500, detail="Food analysis failed.")
+        raise HTTPException(status_code=500, detail="Transcription failed.")
 
-    if "error" in result:
-        raise HTTPException(status_code=422, detail=result["error"])
-
-    return {**result, "photo_key": None}
+    return {"transcript": transcript}
 
 
 @router.post("/log")
@@ -522,17 +513,13 @@ async def search_food_history(
     q: str = Query(..., min_length=1, max_length=100),
     user: User = Depends(get_current_user),
 ):
-    """
-    Поиск по уже залогированным блюдам пользователя — для быстрого повторного
-    добавления (QuickActions → поиск). По одному результату на уникальное
-    название, самая свежая порция как шаблон.
-    """
     items = (
         await FoodItem.filter(
             food_log__user_id=user.telegram_id, food_name__icontains=q
         )
         .order_by("-food_log__logged_at")
         .limit(50)
+        .prefetch_related("food_log")
         .all()
     )
 
@@ -543,6 +530,7 @@ async def search_food_history(
         if key in seen:
             continue
         seen.add(key)
+        photo_url = await get_photo_url(item.food_log.photo_url)
         results.append(
             {
                 "food_name": item.food_name,
@@ -554,6 +542,7 @@ async def search_food_history(
                 "fiber_g": float(item.fiber_g),
                 "sugar_g": float(item.sugar_g),
                 "water_ml": item.water_ml,
+                "photo_url": photo_url,
             }
         )
         if len(results) >= 15:

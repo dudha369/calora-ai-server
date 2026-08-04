@@ -218,68 +218,6 @@ For multiple dishes, meal_name is a short concrete description of what was
 described (you may combine dish names). Return ALL text in {language}.
 """
 
-VOICE_FOOD_PROMPT_TEMPLATE = """
-You are a precise nutrition analyst for a calorie and hydration tracking app.
-
-You receive a short voice recording where the user describes, out loud, what
-they ate or drank. First understand what was said (it may be in any spoken
-language), then estimate the dishes, portions and macros — exactly as you
-would from a text description.
-
-Rules:
-- Identify every distinct dish/drink actually mentioned in the recording. Do
-  not invent items that weren't said, even implied ones.
-- If the recording is silent, unintelligible, or clearly not about food,
-  return {{"error": "no_food_detected"}}.
-- Estimate portion_g using quantities mentioned in speech if given; otherwise
-  assume a typical serving size.
-- For EVERY item estimate water_ml the same way as for text/photo: dry solid
-  foods → 0, drinks/soups use typical water fractions (water/tea/coffee ~98%,
-  milk ~87%, juice ~88%, soda ~89%, soup ~92%, beer/wine ~90-95%).
-- Because there is no photo and speech can be mis-heard, confidence should be
-  conservative — cap it at 0.75 (unless reusing an exact history match, see
-  the history note below), and set ask_user=true with a clarifying
-  portion_note whenever real ambiguity remains.
-- portion_note must be phrased as YOUR observation or assumption, never as a
-  question directed at the user — the app has no way for them to respond to it.
-
-Return ONLY valid JSON, no markdown, no extra text — same shape as photo/text analysis:
-{{
-  "meal_name": "Name in {language}",
-  "dishes": [
-    {{
-      "name": "Dish or drink name in {language}",
-      "portion_g": 200,
-      "calories": 350,
-      "protein_g": 25.0,
-      "fat_g": 12.0,
-      "carbs_g": 30.0,
-      "fiber_g": 4.0,
-      "sugar_g": 5.0,
-      "water_ml": 0,
-      "confidence": 0.7
-    }}
-  ],
-  "total": {{
-    "calories": 350,
-    "protein_g": 25.0,
-    "fat_g": 12.0,
-    "carbs_g": 30.0,
-    "fiber_g": 4.0,
-    "sugar_g": 5.0,
-    "water_ml": 0
-  }},
-  "portion_note": "Estimated from voice description",
-  "ask_user": false
-}}
-
-Same meal_name rules as usual: for a single dish/drink, meal_name MUST equal
-that dish's name verbatim — never a category like "breakfast" or "snack".
-For multiple dishes, meal_name is a short concrete description of what was
-described (you may combine dish names). Return ALL text in {language},
-regardless of which language the user spoke in the recording.
-"""
-
 
 def _build_prompt(language_code: str) -> str:
     lang = _LANG_NAMES.get(language_code, language_code.capitalize())
@@ -289,11 +227,6 @@ def _build_prompt(language_code: str) -> str:
 def _build_text_prompt(language_code: str) -> str:
     lang = _LANG_NAMES.get(language_code, language_code.capitalize())
     return TEXT_FOOD_PROMPT_TEMPLATE.format(language=lang)
-
-
-def _build_voice_prompt(language_code: str) -> str:
-    lang = _LANG_NAMES.get(language_code, language_code.capitalize())
-    return VOICE_FOOD_PROMPT_TEMPLATE.format(language=lang)
 
 
 async def analyze_food_photo(
@@ -330,14 +263,20 @@ async def analyze_food_text(
     return await send_text(prompt, description)
 
 
-async def analyze_food_voice(
-    audio_bytes: bytes,
-    mime_type: str = "audio/wav",
-    language: str = "en",
-    user_id: Optional[int] = None,
-) -> dict:
-    """Тот же контракт, но источник — голосовая запись."""
-    prompt = _build_voice_prompt(language)
-    if user_id is not None:
-        prompt += await build_recent_food_history(user_id)
-    return await analyze_audio(prompt, audio_bytes, mime_type)
+TRANSCRIBE_PROMPT = """
+You transcribe short voice recordings verbatim, in the language the person is
+speaking. Return ONLY valid JSON, no markdown, no extra text:
+{"transcript": "exact transcription of what was said"}
+If the recording is silent or contains no intelligible speech, return
+{"transcript": ""}.
+"""
+
+
+async def transcribe_voice(audio_bytes: bytes, mime_type: str = "audio/wav") -> str:
+    """
+    Быстрая транскрипция голосовой записи в текст — первый шаг голосового
+    ввода. Дальше текст идёт в analyze_food_text() тем же путём, что и
+    обычное текстовое описание.
+    """
+    result = await analyze_audio(TRANSCRIBE_PROMPT, audio_bytes, mime_type)
+    return result.get("transcript", "")
