@@ -46,7 +46,7 @@ from db import (
     DailyGoal,
     WaterLog,
 )
-from ai.gemini import GeminiUnavailableError
+from ai.gemini import GeminiUnavailableError, GeminiQuotaExceededError
 from ai.services.food_analyzer import (
     analyze_food_photo,
     analyze_food_text,
@@ -305,6 +305,9 @@ async def analyze_photo(
             ),
             upload_food_photo(image_bytes, user.telegram_id, mime_type),
         )
+    except GeminiQuotaExceededError:
+        logger.warning("Gemini quota exceeded for user %s", user.telegram_id)
+        raise HTTPException(status_code=429, detail="ai_quota_exceeded")
     except GeminiUnavailableError as exc:
         logger.warning("Gemini unavailable for user %s: %s", user.telegram_id, exc)
         raise HTTPException(
@@ -341,13 +344,17 @@ async def analyze_text(body: FoodTextIn, user: User = Depends(get_current_user))
             language=body.language or user.language_code,
             user_id=user.telegram_id,
         )
-    except GeminiUnavailableError:
+    except GeminiQuotaExceededError:
+        logger.warning("Gemini quota exceeded for user %s", user.telegram_id)
+        raise HTTPException(status_code=429, detail="ai_quota_exceeded")
+    except GeminiUnavailableError as exc:
+        logger.warning("Gemini unavailable for user %s: %s", user.telegram_id, exc)
         raise HTTPException(
             status_code=503,
             detail="AI model is temporarily overloaded. Please try again in a moment.",
         )
     except Exception as exc:
-        logger.error("Text food analysis failed for user %s: %s", user.telegram_id, exc)
+        logger.error("Food analysis failed for user %s: %s", user.telegram_id, exc)
         raise HTTPException(status_code=500, detail="Food analysis failed.")
 
     if "error" in result:
@@ -385,16 +392,18 @@ async def transcribe_voice_endpoint(
 
     try:
         transcript = await transcribe_voice(audio_bytes, mime_type="audio/wav")
-    except GeminiUnavailableError:
+    except GeminiQuotaExceededError:
+        logger.warning("Gemini quota exceeded for user %s", user.telegram_id)
+        raise HTTPException(status_code=429, detail="ai_quota_exceeded")
+    except GeminiUnavailableError as exc:
+        logger.warning("Gemini unavailable for user %s: %s", user.telegram_id, exc)
         raise HTTPException(
             status_code=503,
             detail="AI model is temporarily overloaded. Please try again in a moment.",
         )
     except Exception as exc:
-        logger.error(
-            "Voice transcription failed for user %s: %s", user.telegram_id, exc
-        )
-        raise HTTPException(status_code=500, detail="Transcription failed.")
+        logger.error("Food analysis failed for user %s: %s", user.telegram_id, exc)
+        raise HTTPException(status_code=500, detail="Food analysis failed.")
 
     return {"transcript": transcript}
 

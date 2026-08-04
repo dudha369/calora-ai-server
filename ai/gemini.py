@@ -1,4 +1,4 @@
-# ai/gemini.py (полный файл после правки)
+# ai/gemini.py
 
 import asyncio
 import json
@@ -18,16 +18,16 @@ _client = genai.Client(
     http_options={"base_url": config.CLOUDFLARE_WORKER_ENDPOINT.get_secret_value()},
 )
 MODEL = "gemini-2.5-flash"
+# Более лёгкая модель с заметно выше бесплатным дневным лимитом (RPD) —
+# используется как автоматический fallback, когда MODEL упирается в квоту.
+FALLBACK_MODEL = "gemini-2.5-flash-lite"
 
-GEMINI_TIMEOUT = 60  # было 30 — image-анализ может занимать дольше
+GEMINI_TIMEOUT = 60
 MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 
-# Лимиты вынесены в константы: один файл для тюнинга, ноль дублирования.
-# Gemini 2.5 Flash тратит thinking-токены из того же пула max_output_tokens,
-# поэтому реального «места» для JSON всегда меньше, чем написано в цифре.
-MAX_OUTPUT_TOKENS_TEXT = 4_096  # советы / квесты / цели — компактный JSON
-MAX_OUTPUT_TOKENS_IMAGE = 16_384  # N блюд + total + notes — нужен запас
+MAX_OUTPUT_TOKENS_TEXT = 4_096
+MAX_OUTPUT_TOKENS_IMAGE = 16_384
 
 
 class GeminiError(Exception):
@@ -35,15 +35,32 @@ class GeminiError(Exception):
 
 
 class GeminiUnavailableError(GeminiError):
-    """503 UNAVAILABLE — временная перегрузка модели."""
+    """503 UNAVAILABLE — временная перегрузка модели. Есть смысл ретраить."""
+
+
+class GeminiQuotaExceededError(GeminiError):
+    """429 RESOURCE_EXHAUSTED — дневной/минутный лимит запросов исчерпан.
+    Ретраить одну и ту же модель бессмысленно — квота не снимется за
+    секунды. Обрабатывается на уровне _generate_with_fallback переключением
+    на FALLBACK_MODEL, а не здесь."""
 
 
 def _is_unavailable(exc: Exception) -> bool:
     msg = str(exc).upper()
+    if "RESOURCE_EXHAUSTED" in msg:
+        return False
     return "503" in msg or "UNAVAILABLE" in msg or "HIGH DEMAND" in msg
 
 
+def _is_quota_exceeded(exc: Exception) -> bool:
+    msg = str(exc).upper()
+    return "RESOURCE_EXHAUSTED" in msg or "429" in msg
+
+
 async def _with_retry(coro_factory, *, operation: str):
+    """Ретраит ТОЛЬКО временную перегрузку (503). Quota (429) пробрасывает
+    сразу как GeminiQuotaExceededError — её обрабатывает вызывающий код
+    (см. _generate_with_fallback)."""
     last_exc: Optional[Exception] = None
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -52,6 +69,9 @@ async def _with_retry(coro_factory, *, operation: str):
         except asyncio.TimeoutError:
             raise GeminiError(f"Gemini timeout after {GEMINI_TIMEOUT}s")
         except Exception as exc:
+            if _is_quota_exceeded(exc):
+                raise GeminiQuotaExceededError(str(exc)) from exc
+
             if not _is_unavailable(exc):
                 raise
 
@@ -76,6 +96,28 @@ async def _with_retry(coro_factory, *, operation: str):
     raise GeminiUnavailableError(
         "Gemini is temporarily unavailable due to high demand. Please try again later."
     ) from last_exc
+
+
+async def _generate_with_fallback(build_coro, *, operation: str):
+    """
+    Пробует MODEL (flash); если он упёрся в дневную квоту — автоматически
+    переключается на FALLBACK_MODEL (flash-lite), у которого выше бесплатный
+    RPD. build_coro(model: str) строит один и тот же запрос под любую модель.
+    Если квота исчерпана и там, и там — пробрасывает GeminiQuotaExceededError
+    дальше (её ловит api/food.py и превращает в 429 "ai_quota_exceeded").
+    """
+    try:
+        return await _with_retry(lambda: build_coro(MODEL), operation=operation)
+    except GeminiQuotaExceededError:
+        logger.warning(
+            "Gemini %s: quota exceeded on %s, falling back to %s",
+            operation,
+            MODEL,
+            FALLBACK_MODEL,
+        )
+        return await _with_retry(
+            lambda: build_coro(FALLBACK_MODEL), operation=f"{operation}(fallback)"
+        )
 
 
 def _parse_json(text: str) -> dict:
@@ -113,9 +155,9 @@ def _parse_json(text: str) -> dict:
 
 
 async def send_text(system_prompt: str, user_message: str) -> dict:
-    def _make_coro():
+    def _make_coro(model: str):
         return _client.aio.models.generate_content(
-            model=MODEL,
+            model=model,
             contents=user_message,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -125,7 +167,7 @@ async def send_text(system_prompt: str, user_message: str) -> dict:
             ),
         )
 
-    response = await _with_retry(_make_coro, operation="send_text")
+    response = await _generate_with_fallback(_make_coro, operation="send_text")
     return _parse_json(response.text)
 
 
@@ -139,9 +181,9 @@ async def analyze_image(
     if user_note:
         instruction += f" User clarification: {user_note.strip()}"
 
-    def _make_coro():
+    def _make_coro(model: str):
         return _client.aio.models.generate_content(
-            model=MODEL,
+            model=model,
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
                 instruction,
@@ -154,7 +196,7 @@ async def analyze_image(
             ),
         )
 
-    response = await _with_retry(_make_coro, operation="analyze_image")
+    response = await _generate_with_fallback(_make_coro, operation="analyze_image")
     return _parse_json(response.text)
 
 
@@ -163,9 +205,9 @@ async def analyze_audio(
     audio_bytes: bytes,
     mime_type: str = "audio/wav",
 ) -> dict:
-    def _make_coro():
+    def _make_coro(model: str):
         return _client.aio.models.generate_content(
-            model=MODEL,
+            model=model,
             contents=[
                 types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
                 "Listen to this audio and follow the system instructions.",
@@ -173,10 +215,10 @@ async def analyze_audio(
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=0.3,
-                max_output_tokens=MAX_OUTPUT_TOKENS_IMAGE,  # dishes[] может быть длинным, как у фото
+                max_output_tokens=MAX_OUTPUT_TOKENS_IMAGE,
                 response_mime_type="application/json",
             ),
         )
 
-    response = await _with_retry(_make_coro, operation="analyze_audio")
+    response = await _generate_with_fallback(_make_coro, operation="analyze_audio")
     return _parse_json(response.text)
