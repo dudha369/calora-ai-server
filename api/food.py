@@ -273,14 +273,13 @@ async def analyze_photo(
     request: Request,
     file: UploadFile = File(...),
     notes: Optional[str] = Form(None, max_length=MAX_NOTES_LENGTH),
+    language: Optional[str] = Form(None),
     user: User = Depends(get_current_user),
 ):
-    # ── Rate limiting ──
     check_rate_limit(
         user.telegram_id, bucket="analyze", max_per_minute=MAX_ANALYZE_PER_MINUTE
     )
 
-    # ── MIME validation ──
     mime_type = file.content_type or "image/jpeg"
     if mime_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(
@@ -288,7 +287,6 @@ async def analyze_photo(
             detail=f"Unsupported file type: {mime_type}. Allowed: {', '.join(sorted(ALLOWED_MIME_TYPES))}",
         )
 
-    # ── File size limit ──
     image_bytes = await file.read()
     if len(image_bytes) > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(
@@ -296,11 +294,14 @@ async def analyze_photo(
             detail=f"File too large. Max size: {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB",
         )
 
-    # Загружаем фото параллельно с анализом — экономим ~300-500ms
     try:
         result, photo_key = await asyncio.gather(
             analyze_food_photo(
-                image_bytes, mime_type, notes=notes, language=user.language_code
+                image_bytes,
+                mime_type,
+                notes=notes,
+                language=language or user.language_code,
+                user_id=user.telegram_id,
             ),
             upload_food_photo(image_bytes, user.telegram_id, mime_type),
         )
@@ -326,18 +327,19 @@ MAX_TEXT_DESCRIPTION_LENGTH = 500
 
 class FoodTextIn(BaseModel):
     description: str = Field(min_length=1, max_length=MAX_TEXT_DESCRIPTION_LENGTH)
+    language: Optional[str] = None
 
 
 @router.post("/analyze-text")
 async def analyze_text(body: FoodTextIn, user: User = Depends(get_current_user)):
-    """Тот же контракт, что /analyze, но без фото — описание блюда текстом."""
     check_rate_limit(
         user.telegram_id, bucket="analyze", max_per_minute=MAX_ANALYZE_PER_MINUTE
     )
-
     try:
         result = await analyze_food_text(
-            body.description, language=user.language_code, user_id=user.telegram_id
+            body.description,
+            language=body.language or user.language_code,
+            user_id=user.telegram_id,
         )
     except GeminiUnavailableError:
         raise HTTPException(
@@ -360,9 +362,10 @@ MAX_AUDIO_SIZE_BYTES = 10 * 1024 * 1024  # голосовые заметки к�
 
 @router.post("/analyze-voice")
 async def analyze_voice(
-    file: UploadFile = File(...), user: User = Depends(get_current_user)
+    file: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+    user: User = Depends(get_current_user),
 ):
-    """Голосовое описание блюда. Фронт всегда шлёт WAV (см. audioToWav.ts на клиенте)."""
     check_rate_limit(
         user.telegram_id, bucket="analyze", max_per_minute=MAX_ANALYZE_PER_MINUTE
     )
@@ -385,7 +388,7 @@ async def analyze_voice(
         result = await analyze_food_voice(
             audio_bytes,
             mime_type="audio/wav",
-            language=user.language_code,
+            language=language or user.language_code,
             user_id=user.telegram_id,
         )
     except GeminiUnavailableError:

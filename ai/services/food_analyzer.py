@@ -2,23 +2,18 @@
 Анализ фото, текстовых описаний и голосовых записей еды и напитков → КБЖУ +
 клетчатка + сахар + объём воды через Gemini.
 
-Каждое блюдо (включая напитки) получает поле water_ml — оценку гидратации.
-Для твёрдой еды это обычно 0, для напитков/супов — оценка по типичной доле
-воды (согласовано с ручными пресетами в src/pages/WaterPage.tsx, чтобы цифры
-не расходились между ИИ-распознаванием и ручным вводом).
+notes — необязательное уточнение к фото. Промпт формулирует его как источник
+ВТОРОГО порядка: фото остаётся основным источником истины о том, ЧТО на
+тарелке; notes лишь уточняет уже увиденное или (если ссылается на прошлый
+приём пищи) подтягивает точные значения из истории логов.
 
-notes — необязательное уточнение, которое пользователь вводит после съёмки
-фото, до запуска анализа (см. FoodNotesSheet на фронте). Промпт намеренно
-формулирует notes как источник ВТОРОГО порядка: фото остаётся основным
-источником истины, а notes лишь уточняет уже увиденное.
+analyze_food_text / analyze_food_voice / analyze_food_photo — все три при
+наличии user_id подмешивают недавнюю историю логов (food_history.py), чтобы
+ИИ понимал ссылки вида "как вчера".
 
-analyze_food_text / analyze_food_voice — тот же контракт, но без фото:
-пользователь описывает блюдо текстом или голосом (см. QuickActions).
-Обоим при наличии user_id подмешивается недавняя история логов
-(ai/services/food_history.py), чтобы ИИ понимал ссылки вида "как вчера".
-
-language — язык приложения пользователя (из User.language_code). Все названия
-блюд возвращаются на этом языке, независимо от языка голосовой записи.
+language — язык ответа. Явно передаётся с фронта при каждом запросе (текущий
+i18n.language), а не берётся молча из БД — так исключается риск устаревшего
+User.language_code.
 """
 
 from typing import Optional
@@ -27,11 +22,15 @@ from ai.gemini import analyze_image, analyze_audio, send_text
 from ai.services.food_history import build_recent_food_history
 
 # Маппинг language_code → человекочитаемое название для промпта.
-# Fallback — English.
+# "uk" — стандартный ISO-код, "ua" — internal-код, которым фронт этого
+# проекта называет папку локали Ukrainian (см. src/locales/ua). Оба должны
+# указывать на один и тот же язык, иначе промпт получает "Ua" вместо
+# "Ukrainian" и модель может съехать на случайный язык ответа.
 _LANG_NAMES: dict[str, str] = {
     "en": "English",
     "ru": "Russian",
     "uk": "Ukrainian",
+    "ua": "Ukrainian",
     "es": "Spanish",
     "de": "German",
     "fr": "French",
@@ -63,6 +62,11 @@ You are a precise nutrition analyst for a calorie and hydration tracking app.
 4. If the note only adds detail about something you already identified visually
    (ingredients, "no sugar", brand, exact weight), incorporate it normally — this is
    the one case where the note is genuinely useful.
+5. If the note references a past meal (e.g. "as yesterday", "same as usual") AND a
+   matching entry appears in the recent food log provided below, you may reuse that
+   entry's exact portion and macros for the dish you've identified in the photo — but
+   only as a refinement of the AMOUNT/values for something the photo already confirms
+   is present, never as evidence for adding an item that isn't visible in the photo.
 
 ===== WHEN THE PHOTO ITSELF IS NOT USABLE =====
 Before identifying any dishes, judge whether the image is actually readable:
@@ -137,7 +141,11 @@ Rules:
     intent from a photo alone, so never guess it.
 - Order dishes logically: soups/starters → main courses → sides → salads → desserts → drinks.
 - confidence reflects how certain YOU are from the visual evidence alone — a note cannot
-  inflate it. If confidence < 0.6 for any dish, set ask_user=true and explain in portion_note.
+  inflate it (except when reusing an exact history match, see rule 5 above). If confidence
+  < 0.6 for any dish, set ask_user=true and explain in portion_note.
+- portion_note must be phrased as YOUR observation or assumption, never as a question
+  directed at the user — the app has no way for them to respond to it. Write e.g.
+  "Assumed 2 eggs (typical serving)", not "How many eggs were used?".
 - Always use grams for portions (liquids: use the ml-equivalent in grams), float for macros
 - fiber_g = dietary fiber estimate; sugar_g = total sugars (including natural)
 - total.water_ml MUST equal the sum of all dishes' water_ml
@@ -166,9 +174,13 @@ Rules:
   foods → 0, drinks/soups use typical water fractions (water/tea/coffee ~98%,
   milk ~87%, juice ~88%, soda ~89%, soup ~92%, beer/wine ~90-95%).
 - Because there is no photo to verify against, confidence should generally be
-  lower than photo-based analysis — cap it at 0.75, and set ask_user=true with
-  a clarifying portion_note whenever the description leaves real ambiguity
+  lower than photo-based analysis — cap it at 0.75 (unless reusing an exact
+  history match, see the history note below), and set ask_user=true with a
+  clarifying portion_note whenever the description leaves real ambiguity
   about quantity or ingredients.
+- portion_note must be phrased as YOUR observation or assumption, never as a
+  question directed at the user — the app has no way for them to respond to
+  it. Write e.g. "Assumed a medium portion (~250g)", not "How much did you eat?".
 
 Return ONLY valid JSON, no markdown, no extra text — same shape as photo analysis:
 {{
@@ -225,8 +237,11 @@ Rules:
   foods → 0, drinks/soups use typical water fractions (water/tea/coffee ~98%,
   milk ~87%, juice ~88%, soda ~89%, soup ~92%, beer/wine ~90-95%).
 - Because there is no photo and speech can be mis-heard, confidence should be
-  conservative — cap it at 0.75, and set ask_user=true with a clarifying
+  conservative — cap it at 0.75 (unless reusing an exact history match, see
+  the history note below), and set ask_user=true with a clarifying
   portion_note whenever real ambiguity remains.
+- portion_note must be phrased as YOUR observation or assumption, never as a
+  question directed at the user — the app has no way for them to respond to it.
 
 Return ONLY valid JSON, no markdown, no extra text — same shape as photo/text analysis:
 {{
@@ -286,12 +301,17 @@ async def analyze_food_photo(
     mime_type: str = "image/jpeg",
     notes: Optional[str] = None,
     language: str = "en",
+    user_id: Optional[int] = None,
 ) -> dict:
     """
     Принимает сырые байты фото (+ опциональное уточнение пользователя),
     возвращает dict с meal_name, dishes[] и total{} (включая water_ml).
+    Если передан user_id — подмешивает недавнюю историю логов, чтобы notes
+    вида "как вчера" могли подтянуть точные значения (см. правило 5 в промпте).
     """
     prompt = _build_prompt(language)
+    if user_id is not None:
+        prompt += await build_recent_food_history(user_id)
     return await analyze_image(prompt, image_bytes, mime_type, user_note=notes)
 
 
@@ -302,9 +322,7 @@ async def analyze_food_text(
 ) -> dict:
     """
     Тот же контракт, что и analyze_food_photo, но источник — текстовое
-    описание пользователя, без фото. Если передан user_id, в промпт
-    подмешивается недавняя история логов (см. food_history.py) — чтобы ИИ
-    мог обработать "как вчера" / "то же что обычно".
+    описание пользователя, без фото.
     """
     prompt = _build_text_prompt(language)
     if user_id is not None:
@@ -318,10 +336,7 @@ async def analyze_food_voice(
     language: str = "en",
     user_id: Optional[int] = None,
 ) -> dict:
-    """
-    Тот же контракт, но источник — голосовая запись. Тот же принцип
-    подмешивания истории логов, что и в analyze_food_text.
-    """
+    """Тот же контракт, но источник — голосовая запись."""
     prompt = _build_voice_prompt(language)
     if user_id is not None:
         prompt += await build_recent_food_history(user_id)

@@ -55,7 +55,9 @@ async def build_recent_food_history(user_id: int, today: Optional[date] = None) 
     return (
         "\n\nUser's recent food log, for reference only — use it ONLY if the "
         'description explicitly references a past meal (e.g. "like yesterday", '
-        '"same as before", "my usual"), and in that case reuse the exact '
-        "matching entry's macros rather than re-estimating. Otherwise ignore "
-        "this list completely:\n" + "\n".join(lines)
+        '"same as before", "my usual"). In that case: reuse the exact matching '
+        "entry's macros rather than re-estimating, set confidence high (0.9+) "
+        "for those items, and do NOT set ask_user for them — reusing a known "
+        "logged entry is not an ambiguous estimate. If the description does not "
+        "reference a past meal, ignore this list completely:\n" + "\n".join(lines)
     )
