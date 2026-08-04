@@ -4,21 +4,15 @@ from tortoise.contrib.pydantic import pydantic_model_creator
 
 
 class FavoriteMeal(Model):
-    """
-    Избранный приём пищи — сохранённый шаблон для быстрого повторного
-    логирования (см. api/favorites.py). Структура зеркалит FoodLog/FoodItem:
-    один FavoriteMeal содержит несколько FavoriteMealItem.
-
-    Копия items независима от исходного FoodLog — удаление лога не трогает
-    избранное, и наоборот. Фото сознательно не хранится: пришлось бы тащить
-    reference-counting логику B2 (см. FoodLog.photo_url) в третье место —
-    не стоит того ради избранного.
-    """
-
     user = fields.ForeignKeyField(
         "models.User", related_name="favorite_meals", on_delete=fields.CASCADE
     )
     meal_name = fields.CharField(max_length=200)
+    # Не ForeignKeyField к FoodLog намеренно: избранное должно пережить
+    # удаление исходной записи еды (это независимая копия, см. докстринг
+    # класса выше). Обычный nullable int — только для проверки "это блюдо
+    # уже в избранном?" по FoodLogModal.
+    source_log_id = fields.IntField(null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
 
     class Meta:

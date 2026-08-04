@@ -1,11 +1,16 @@
 """
-GET    /api/favorites        — список избранных блюд пользователя
-POST   /api/favorites        — сохранить блюдо в избранное (копия items,
-                                независима от исходного FoodLog)
-DELETE /api/favorites/{id}   — удалить из избранного
+GET    /api/favorites               — список избранных блюд пользователя
+POST   /api/favorites               — сохранить блюдо в избранное (копия
+                                       items, независима от исходного FoodLog)
+DELETE /api/favorites/{id}          — удалить из избранного по id
+GET    /api/favorites/by-log/{id}   — избранное, сохранённое из данного FoodLog
+                                       (или null) — для звёздочки в FoodLogModal
+DELETE /api/favorites/by-log/{id}   — удалить избранное, сохранённое из
+                                       данного FoodLog
 """
 
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -37,6 +42,7 @@ class FavoriteItemIn(BaseModel):
 class FavoriteMealIn(BaseModel):
     meal_name: str
     items: list[FavoriteItemIn]
+    source_log_id: Optional[int] = None
 
 
 async def _serialize(favorite: FavoriteMeal) -> dict:
@@ -53,6 +59,15 @@ async def list_favorites(user: User = Depends(get_current_user)):
     return [await _serialize(f) for f in favs]
 
 
+@router.get("/by-log/{log_id}")
+async def get_favorite_by_log(log_id: int, user: User = Depends(get_current_user)):
+    """Есть ли у этого FoodLog сохранённая копия в избранном. null, если нет."""
+    favorite = await FavoriteMeal.get_or_none(
+        user_id=user.telegram_id, source_log_id=log_id
+    )
+    return await _serialize(favorite) if favorite else None
+
+
 @router.post("")
 async def create_favorite(body: FavoriteMealIn, user: User = Depends(get_current_user)):
     if not body.items:
@@ -61,6 +76,7 @@ async def create_favorite(body: FavoriteMealIn, user: User = Depends(get_current
     favorite = await FavoriteMeal.create(
         user_id=user.telegram_id,
         meal_name=body.meal_name,
+        source_log_id=body.source_log_id,
     )
     for item in body.items:
         await FavoriteMealItem.create(
@@ -77,6 +93,16 @@ async def create_favorite(body: FavoriteMealIn, user: User = Depends(get_current
         )
 
     return await _serialize(favorite)
+
+
+@router.delete("/by-log/{log_id}")
+async def delete_favorite_by_log(log_id: int, user: User = Depends(get_current_user)):
+    deleted = await FavoriteMeal.filter(
+        user_id=user.telegram_id, source_log_id=log_id
+    ).delete()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Favorite not found")
+    return {"deleted": True}
 
 
 @router.delete("/{favorite_id}")
