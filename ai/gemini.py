@@ -1,5 +1,3 @@
-# ai/gemini.py
-
 import asyncio
 import json
 import logging
@@ -17,17 +15,25 @@ _client = genai.Client(
     api_key=config.GEMINI_API_KEY.get_secret_value(),
     http_options={"base_url": config.CLOUDFLARE_WORKER_ENDPOINT.get_secret_value()},
 )
-MODEL = "gemini-2.5-flash"
+
+# Алиасы вместо жёстко прибитых версий: Google сам "горячо" переключает их
+# на актуальную GA-модель при каждом релизе (см. https://ai.google.dev/gemini-api/docs/models).
+# Это защищает от повторения ситуации с gemini-2.5-flash-lite, которая внезапно
+# стала недоступна новым API-ключам (404 NOT_FOUND) без предупреждения в коде.
+MODEL = "gemini-flash-latest"
 # Более лёгкая модель с заметно выше бесплатным дневным лимитом (RPD) —
 # используется как автоматический fallback, когда MODEL упирается в квоту.
-FALLBACK_MODEL = "gemini-2.5-flash-lite"
+FALLBACK_MODEL = "gemini-flash-lite-latest"
 
-GEMINI_TIMEOUT = 60
+GEMINI_TIMEOUT = 60  # было 30 — image-анализ может занимать дольше
 MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0
 
-MAX_OUTPUT_TOKENS_TEXT = 4_096
-MAX_OUTPUT_TOKENS_IMAGE = 16_384
+# Лимиты вынесены в константы: один файл для тюнинга, ноль дублирования.
+# Gemini 2.5 Flash тратит thinking-токены из того же пула max_output_tokens,
+# поэтому реального «места» для JSON всегда меньше, чем написано в цифре.
+MAX_OUTPUT_TOKENS_TEXT = 4_096  # советы / квесты / цели — компактный JSON
+MAX_OUTPUT_TOKENS_IMAGE = 16_384  # N блюд + total + notes — нужен запас
 
 
 class GeminiError(Exception):
@@ -41,12 +47,14 @@ class GeminiUnavailableError(GeminiError):
 class GeminiQuotaExceededError(GeminiError):
     """429 RESOURCE_EXHAUSTED — дневной/минутный лимит запросов исчерпан.
     Ретраить одну и ту же модель бессмысленно — квота не снимется за
-    секунды. Обрабатывается на уровне _generate_with_fallback переключением
-    на FALLBACK_MODEL, а не здесь."""
+    секунды повторов. Обрабатывается в _generate_with_fallback переключением
+    на FALLBACK_MODEL, а не ретраями внутри _with_retry."""
 
 
 def _is_unavailable(exc: Exception) -> bool:
     msg = str(exc).upper()
+    # RESOURCE_EXHAUSTED тоже даёт код 429, но это не временная перегрузка —
+    # исключаем его отсюда явно, чтобы не путать с quota.
     if "RESOURCE_EXHAUSTED" in msg:
         return False
     return "503" in msg or "UNAVAILABLE" in msg or "HIGH DEMAND" in msg
@@ -59,8 +67,7 @@ def _is_quota_exceeded(exc: Exception) -> bool:
 
 async def _with_retry(coro_factory, *, operation: str):
     """Ретраит ТОЛЬКО временную перегрузку (503). Quota (429) пробрасывает
-    сразу как GeminiQuotaExceededError — её обрабатывает вызывающий код
-    (см. _generate_with_fallback)."""
+    сразу как GeminiQuotaExceededError — её обрабатывает _generate_with_fallback."""
     last_exc: Optional[Exception] = None
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -215,7 +222,7 @@ async def analyze_audio(
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=0.3,
-                max_output_tokens=MAX_OUTPUT_TOKENS_IMAGE,
+                max_output_tokens=MAX_OUTPUT_TOKENS_IMAGE,  # dishes[] может быть длинным, как у фото
                 response_mime_type="application/json",
             ),
         )
