@@ -23,6 +23,9 @@ class Config(BaseSettings):
     B2_APPLICATION_KEY: SecretStr = SecretStr("")
     B2_BUCKET: str = ""
 
+    OFF_USER_ID: str = ""
+    OFF_PASSWORD: SecretStr = SecretStr("")
+
     WHITELIST_ENABLED: bool = False
     WHITELIST_IDS: str = ""
     ADMIN_TELEGRAM_ID: int = 0
