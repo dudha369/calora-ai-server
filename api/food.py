@@ -10,10 +10,12 @@ DELETE /api/food/photo/{photo_key:path} — удалить неиспользо�
 /analyze принимает опциональное поле формы `notes` — уточнение пользователя,
 введённое после съёмки фото (см. ai/services/food_analyzer.py).
 
-/log принимает опциональное поле `water_ml` — суммарную гидратацию,
-которую ИИ нашёл среди распознанных блюд/напитков. Если оно больше 0,
-после сохранения FoodLog автоматически создаётся запись в WaterLog —
-так вода логируется без отдельного действия пользователя.
+Вода: по одной WaterLog-записи на КАЖДОЕ блюдо/напиток с water_ml > 0
+(см. _create_auto_water_logs), а не одна агрегированная запись на весь
+приём пищи — так "Омлет + Горячий шоколад" даёт запись воды с именем
+"Горячий шоколад", а не название всего приёма пищи. При PUT /{log_id}
+такие записи не пересоздаются с нуля, а сопоставляются со старыми по
+имени блюда и обновляются на месте (logged_at и заметки не теряются).
 """
 
 import asyncio
@@ -87,7 +89,7 @@ class FoodItemIn(BaseModel):
     carbs_g: float
     fiber_g: float = 0.0
     sugar_g: float = 0.0
-    water_ml: int = 0  # ← NEW: per-dish hydration, default 0 для обратной совместимости
+    water_ml: int = 0  # per-dish hydration, источник истины для WaterLog
 
 
 class FoodLogIn(BaseModel):
@@ -95,8 +97,9 @@ class FoodLogIn(BaseModel):
     items: list[FoodItemIn]
     photo_key: Optional[str] = None  # ключ объекта в B2, не URL
     meal_name: Optional[str] = None  # обобщающее название приёма пищи (из AI)
-    # Суммарная гидратация, найденная ИИ среди блюд/напитков на фото.
-    # Если > 0 — после сохранения FoodLog автоматически создаётся WaterLog.
+    # Устаревшее поле: раньше задавало суммарную гидратацию на весь лог.
+    # Больше не используется бэкендом (вода считается по item.water_ml),
+    # оставлено опциональным, чтобы не ломать фронт, который иногда его шлёт.
     water_ml: Optional[int] = None
     # Копирование фото из существующего FoodLog (по id).
     # Если указан и photo_key не задан — берём photo_url (ключ B2) из
@@ -165,26 +168,31 @@ async def _recalc_totals(food_log: FoodLog) -> None:
     )
 
 
-async def _maybe_log_water(
+async def _create_auto_water_logs(
     user: User,
     log_date: date,
-    water_ml: int,
     food_log_id: int,
+    items: list[FoodItem],
 ) -> None:
-    """Создаёт WaterLog, привязанный к FoodLog. Отображаемое имя записи
-    теперь берётся из самого FoodLog при чтении (см. api/water.py),
-    отдельно хранить его тут больше не нужно."""
-    if water_ml <= 0:
-        return
-    try:
-        await WaterLog.create(
-            user_id=user.telegram_id,
-            log_date=log_date,
-            amount_ml=water_ml,
-            food_log_id=food_log_id,
-        )
-    except Exception:
-        logger.exception("auto water log failed for user %s", user.telegram_id)
+    """
+    Один WaterLog на каждое блюдо/напиток с water_ml > 0 — а не один общий
+    на весь приём пищи. Так "Омлет + Горячий шоколад" даёт запись воды
+    с именем "Горячий шоколад" (см. WaterLog.food_item), а не всего
+    приёма пищи целиком.
+    """
+    for item in items:
+        if item.water_ml <= 0:
+            continue
+        try:
+            await WaterLog.create(
+                user_id=user.telegram_id,
+                log_date=log_date,
+                amount_ml=item.water_ml,
+                food_log_id=food_log_id,
+                food_item_id=item.id,
+            )
+        except Exception:
+            logger.exception("auto water log failed for user %s", user.telegram_id)
 
 
 async def _create_log_with_items(
@@ -192,15 +200,13 @@ async def _create_log_with_items(
     body_log_date: str,
     body_items: list[FoodItemIn],
     photo_key: Optional[str] = None,
-    water_ml: Optional[int] = None,
     meal_name: Optional[str] = None,
 ) -> dict:
     """
     Общая логика создания FoodLog + FoodItems для /log и /log-barcode.
 
-    water_ml приоритет:
-      1. Явный параметр (backward-compat для scanner-флоу)
-      2. Сумма item.water_ml (новый путь — repeat, или scanner с per-item water)
+    Вода целиком определяется item.water_ml — по одной WaterLog-записи
+    на каждое блюдо/напиток с водой (см. _create_auto_water_logs).
     """
     log_date = parse_date(body_log_date)
 
@@ -211,38 +217,32 @@ async def _create_log_with_items(
         meal_name=meal_name,
     )
 
+    created_items: list[FoodItem] = []
     for item in body_items:
-        await FoodItem.create(
-            food_log_id=food_log.id,
-            food_name=item.food_name,
-            portion_g=Decimal(str(item.portion_g)),
-            calories=item.calories,
-            protein_g=Decimal(str(item.protein_g)),
-            fat_g=Decimal(str(item.fat_g)),
-            carbs_g=Decimal(str(item.carbs_g)),
-            fiber_g=Decimal(str(item.fiber_g)),
-            sugar_g=Decimal(str(item.sugar_g)),
-            water_ml=item.water_ml,  # ← NEW: сохраняем для будущего repeat
+        created_items.append(
+            await FoodItem.create(
+                food_log_id=food_log.id,
+                food_name=item.food_name,
+                portion_g=Decimal(str(item.portion_g)),
+                calories=item.calories,
+                protein_g=Decimal(str(item.protein_g)),
+                fat_g=Decimal(str(item.fat_g)),
+                carbs_g=Decimal(str(item.carbs_g)),
+                fiber_g=Decimal(str(item.fiber_g)),
+                sugar_g=Decimal(str(item.sugar_g)),
+                water_ml=item.water_ml,
+            )
         )
 
     await _recalc_totals(food_log)
     await food_log.refresh_from_db()
-
-    effective_water_ml = (
-        water_ml if water_ml is not None else sum(item.water_ml for item in body_items)
-    )
 
     try:
         await _maybe_sync_streak(user, log_date)
     except Exception:
         logger.exception("streak credit failed for user %s", user.telegram_id)
 
-    await _maybe_log_water(
-        user,
-        log_date,
-        effective_water_ml,
-        food_log_id=food_log.id,
-    )
+    await _create_auto_water_logs(user, log_date, food_log.id, created_items)
 
     items_data = await FoodItemSchema.from_queryset(
         FoodItem.filter(food_log_id=food_log.id)
@@ -425,7 +425,6 @@ async def create_log(body: FoodLogIn, user: User = Depends(get_current_user)):
         body.log_date,
         body.items,
         photo_key=photo_key,
-        water_ml=body.water_ml,
         meal_name=body.meal_name,
     )
 
@@ -439,8 +438,10 @@ async def update_log(
     """
     Правка уже залогированной записи (например, ИИ ошибся в порции/КБЖУ).
 
-    Полностью заменяет items — тот же контракт, что и при создании,
-    поэтому весь UI-код правки просто переиспользует FoodItemIn.
+    items полностью заменяются (как и раньше), но привязанные WaterLog-записи
+    больше не пересоздаются с нуля — сопоставляются со старыми по имени
+    блюда и обновляются на месте: сохраняются logged_at и notes, меняется
+    только amount_ml и привязка к новому FoodItem.
     """
     food_log = await FoodLog.get_or_none(id=log_id, user_id=user.telegram_id)
     if not food_log:
@@ -448,20 +449,32 @@ async def update_log(
     if not body.items:
         raise HTTPException(status_code=422, detail="At least one item is required")
 
+    # Захватываем существующую авто-воду ДО замены items — только так можно
+    # сопоставить её со старыми именами блюд, пока они ещё не удалены.
+    old_water_logs = await WaterLog.filter(
+        food_log_id=log_id, food_item_id__isnull=False
+    ).prefetch_related("food_item")
+    old_water_by_name: dict[str, WaterLog] = {
+        wl.food_item.food_name: wl for wl in old_water_logs if wl.food_item
+    }
+
     # Атомарная замена: удаляем все старые items и создаём новые
     await FoodItem.filter(food_log_id=log_id).delete()
+    new_items: list[FoodItem] = []
     for item in body.items:
-        await FoodItem.create(
-            food_log_id=log_id,
-            food_name=item.food_name,
-            portion_g=Decimal(str(item.portion_g)),
-            calories=item.calories,
-            protein_g=Decimal(str(item.protein_g)),
-            fat_g=Decimal(str(item.fat_g)),
-            carbs_g=Decimal(str(item.carbs_g)),
-            fiber_g=Decimal(str(item.fiber_g)),
-            sugar_g=Decimal(str(item.sugar_g)),
-            water_ml=item.water_ml,
+        new_items.append(
+            await FoodItem.create(
+                food_log_id=log_id,
+                food_name=item.food_name,
+                portion_g=Decimal(str(item.portion_g)),
+                calories=item.calories,
+                protein_g=Decimal(str(item.protein_g)),
+                fat_g=Decimal(str(item.fat_g)),
+                carbs_g=Decimal(str(item.carbs_g)),
+                fiber_g=Decimal(str(item.fiber_g)),
+                sugar_g=Decimal(str(item.sugar_g)),
+                water_ml=item.water_ml,
+            )
         )
 
     await _recalc_totals(food_log)
@@ -492,15 +505,31 @@ async def update_log(
 
     await food_log.refresh_from_db()
 
-    # Пересобираем авто-воду записи под новые значения.
-    # Ручные записи воды (food_log_id=NULL) не затрагиваются.
-    await WaterLog.filter(food_log_id=log_id).delete()
-    await _maybe_log_water(
-        user,
-        food_log.log_date,
-        sum(item.water_ml for item in body.items),
-        food_log_id=log_id,
-    )
+    # Синхронизация авто-воды: обновляем совпавшие по имени записи на месте
+    # (не трогая logged_at/notes), создаём новые для блюд, которых раньше не
+    # было, удаляем осиротевшие (блюдо переименовано/удалено/вода обнулилась).
+    for new_item in new_items:
+        if new_item.water_ml <= 0:
+            continue
+        existing = old_water_by_name.pop(new_item.food_name, None)
+        if existing:
+            existing.amount_ml = new_item.water_ml
+            existing.food_item_id = new_item.id
+            await existing.save()
+        else:
+            try:
+                await WaterLog.create(
+                    user_id=user.telegram_id,
+                    log_date=food_log.log_date,
+                    amount_ml=new_item.water_ml,
+                    food_log_id=log_id,
+                    food_item_id=new_item.id,
+                )
+            except Exception:
+                logger.exception("auto water log failed for user %s", user.telegram_id)
+
+    for leftover in old_water_by_name.values():
+        await leftover.delete()
 
     # Изменение калорий задним числом может повлиять на дневную цель
     try:

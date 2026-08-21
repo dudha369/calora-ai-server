@@ -44,21 +44,26 @@ async def _validate_food_log(food_log_id: int, user_id: int) -> None:
         raise HTTPException(status_code=404, detail="Food log not found")
 
 
-async def _food_log_summary(food_log_id: Optional[int], user_id: int) -> Optional[dict]:
+async def _food_log_summary(
+    food_log_id: Optional[int], food_item_id: Optional[int], user_id: int
+) -> Optional[dict]:
     """
-    Краткая карточка привязанного приёма пищи для WaterLogModal.
-    Тот же принцип отображаемого имени, что и в FoodLogCard на фронте:
-    meal_name, а если его нет — имя первого блюда в логе.
+    Краткая карточка привязанного приёма пищи для WaterLogModal/WaterLogCard.
+    item_name — имя КОНКРЕТНОГО блюда, если запись создана автоматически
+    из-за него (см. WaterLog.food_item); frontend показывает его в первую
+    очередь, и только если его нет — падает на meal_name/first_item_name.
     """
     if not food_log_id:
         return None
 
     food_log = await FoodLog.get_or_none(id=food_log_id, user_id=user_id)
     if not food_log:
-        # Блюдо было удалено, а WaterLog остался отвязан (food_log ON DELETE
-        # SET NULL сработает своим чередом) — до этого момента просто не
-        # показываем карточку, чтобы не падать.
         return None
+
+    item_name = None
+    if food_item_id:
+        item = await FoodItem.get_or_none(id=food_item_id, food_log_id=food_log.id)
+        item_name = item.food_name if item else None
 
     first_item = await FoodItem.filter(food_log_id=food_log.id).first()
 
@@ -66,6 +71,7 @@ async def _food_log_summary(food_log_id: Optional[int], user_id: int) -> Optiona
         "id": food_log.id,
         "log_date": food_log.log_date.isoformat(),
         "meal_name": food_log.meal_name,
+        "item_name": item_name,
         "first_item_name": first_item.food_name if first_item else None,
         "logged_at": food_log.logged_at.isoformat(),
     }
@@ -73,7 +79,9 @@ async def _food_log_summary(food_log_id: Optional[int], user_id: int) -> Optiona
 
 async def _serialize(log: WaterLog) -> dict:
     data = (await WaterLogSchema.from_tortoise_orm(log)).model_dump()
-    data["linked_food_log"] = await _food_log_summary(log.food_log_id, log.user_id)
+    data["linked_food_log"] = await _food_log_summary(
+        log.food_log_id, log.food_item_id, log.user_id
+    )
     return data
 
 
