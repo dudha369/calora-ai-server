@@ -18,6 +18,7 @@ class FoodLog(Model):
 
     log_date = fields.DateField()
     logged_at = fields.DatetimeField(auto_now_add=True)
+    is_public = fields.BooleanField(default=False)
     photo_url = fields.TextField(null=True)
     meal_name = fields.CharField(max_length=200, null=True)
 

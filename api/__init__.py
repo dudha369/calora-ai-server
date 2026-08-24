@@ -13,6 +13,8 @@ from . import (
     stats,
     favorites,
     openfoodfacts,
+    friends,
+    feed,
 )
 
 
@@ -32,5 +34,7 @@ def setup_routers() -> APIRouter:
     router.include_router(stats.router)
     router.include_router(favorites.router)
     router.include_router(openfoodfacts.router)
+    router.include_router(friends.router)
+    router.include_router(feed.router)
 
     return router

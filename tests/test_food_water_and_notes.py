@@ -16,7 +16,7 @@ def clear_rate_limits():
 
 @pytest.mark.asyncio
 async def test_create_food_log_auto_logs_water(client: AsyncClient, seeded_user):
-    """A water_ml > 0 on the food log payload auto-creates a WaterLog entry."""
+    """water_ml > 0 на конкретном item создаёт WaterLog, привязанный к этому item."""
     resp = await client.post(
         "/api/food/log",
         json={
@@ -29,16 +29,18 @@ async def test_create_food_log_auto_logs_water(client: AsyncClient, seeded_user)
                     "protein_g": 1.5,
                     "fat_g": 1.5,
                     "carbs_g": 4.0,
+                    "water_ml": 240,
                 }
             ],
-            "water_ml": 240,
         },
     )
     assert resp.status_code == 200
 
     resp = await client.get("/api/water/2026-06-12")
     assert resp.status_code == 200
-    assert resp.json()["total_ml"] == 240
+    data = resp.json()
+    assert data["total_ml"] == 240
+    assert data["logs"][0]["linked_food_log"]["item_name"] == "Кофе с молоком"
 
 
 @pytest.mark.asyncio

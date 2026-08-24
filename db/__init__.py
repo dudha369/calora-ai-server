@@ -27,4 +27,5 @@ from .models import (
     FavoriteMealSchema,
     FavoriteMealItem,
     FavoriteMealItemSchema,
+    Friendship,
 )

@@ -65,6 +65,7 @@ TORTOISE_ORM = {
                 "db.models.food_log",
                 "db.models.food_item",
                 "db.models.favorite_meal",
+                "db.models.friendship",
                 "db.models.water_log",
                 "db.models.quest",
                 "db.models.ai_tip",

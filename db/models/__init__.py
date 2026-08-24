@@ -17,3 +17,4 @@ from .favorite_meal import (
     FavoriteMealItem,
     FavoriteMealItemSchema,
 )
+from .friendship import Friendship

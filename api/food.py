@@ -546,6 +546,22 @@ async def update_log(
     }
 
 
+class VisibilityUpdate(BaseModel):
+    is_public: bool
+
+
+@router.patch("/{log_id}/visibility")
+async def update_log_visibility(
+    log_id: int, body: VisibilityUpdate, user: User = Depends(get_current_user)
+):
+    updated = await FoodLog.filter(id=log_id, user_id=user.telegram_id).update(
+        is_public=body.is_public
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Log not found")
+    return {"ok": True, "is_public": body.is_public}
+
+
 @router.get("/search")
 async def search_food_history(
     q: str = Query(..., min_length=1, max_length=100),
