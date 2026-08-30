@@ -16,24 +16,19 @@ _client = genai.Client(
     http_options={"base_url": config.CLOUDFLARE_WORKER_ENDPOINT.get_secret_value()},
 )
 
-# Алиасы вместо жёстко прибитых версий: Google сам "горячо" переключает их
-# на актуальную GA-модель при каждом релизе (см. https://ai.google.dev/gemini-api/docs/models).
-# Это защищает от повторения ситуации с gemini-2.5-flash-lite, которая внезапно
-# стала недоступна новым API-ключам (404 NOT_FOUND) без предупреждения в коде.
 MODEL = "gemini-flash-latest"
-# Более лёгкая модель с заметно выше бесплатным дневным лимитом (RPD) —
-# используется как автоматический fallback, когда MODEL упирается в квоту.
 FALLBACK_MODEL = "gemini-flash-lite-latest"
 
-GEMINI_TIMEOUT = 60  # было 30 — image-анализ может занимать дольше
-MAX_RETRIES = 3
+# Понижено с 60/3: раньше таймаут вообще не ретраился (см. баг), поэтому
+# один неудачный запрос сразу становился 500. Теперь таймаут ретраится
+# как временная перегрузка, поэтому общий бюджет времени держим в узде —
+# короче таймаут на попытку, меньше попыток на модель.
+GEMINI_TIMEOUT = 45
+MAX_RETRIES = 2
 _RETRY_BASE_DELAY = 1.0
 
-# Лимиты вынесены в константы: один файл для тюнинга, ноль дублирования.
-# Gemini 2.5 Flash тратит thinking-токены из того же пула max_output_tokens,
-# поэтому реального «места» для JSON всегда меньше, чем написано в цифре.
-MAX_OUTPUT_TOKENS_TEXT = 4_096  # советы / квесты / цели — компактный JSON
-MAX_OUTPUT_TOKENS_IMAGE = 16_384  # N блюд + total + notes — нужен запас
+MAX_OUTPUT_TOKENS_TEXT = 4_096
+MAX_OUTPUT_TOKENS_IMAGE = 16_384
 
 
 class GeminiError(Exception):
@@ -41,20 +36,17 @@ class GeminiError(Exception):
 
 
 class GeminiUnavailableError(GeminiError):
-    """503 UNAVAILABLE — временная перегрузка модели. Есть смысл ретраить."""
+    """Временная перегрузка или таймаут — есть смысл ретраить/фолбэчить."""
 
 
 class GeminiQuotaExceededError(GeminiError):
-    """429 RESOURCE_EXHAUSTED — дневной/минутный лимит запросов исчерпан.
-    Ретраить одну и ту же модель бессмысленно — квота не снимется за
-    секунды повторов. Обрабатывается в _generate_with_fallback переключением
-    на FALLBACK_MODEL, а не ретраями внутри _with_retry."""
+    """429 RESOURCE_EXHAUSTED — дневной/минутный лимит исчерпан.
+    Ретраить одну и ту же модель бессмысленно — обрабатывается переключением
+    на FALLBACK_MODEL в _generate_with_fallback."""
 
 
 def _is_unavailable(exc: Exception) -> bool:
     msg = str(exc).upper()
-    # RESOURCE_EXHAUSTED тоже даёт код 429, но это не временная перегрузка —
-    # исключаем его отсюда явно, чтобы не путать с quota.
     if "RESOURCE_EXHAUSTED" in msg:
         return False
     return "503" in msg or "UNAVAILABLE" in msg or "HIGH DEMAND" in msg
@@ -65,40 +57,43 @@ def _is_quota_exceeded(exc: Exception) -> bool:
     return "RESOURCE_EXHAUSTED" in msg or "429" in msg
 
 
-async def _with_retry(coro_factory, *, operation: str):
-    """Ретраит ТОЛЬКО временную перегрузку (503). Quota (429) пробрасывает
-    сразу как GeminiQuotaExceededError — её обрабатывает _generate_with_fallback."""
+async def _with_retry(coro_factory, *, operation: str, max_retries: int = MAX_RETRIES):
+    """
+    Ретраит таймаут И 503 одинаково — оба являются временной перегрузкой
+    со стороны Gemini, а не поводом сразу падать пользователю в 500.
+    Quota (429/RESOURCE_EXHAUSTED) пробрасывается сразу — её обрабатывает
+    _generate_with_fallback переключением модели.
+    """
     last_exc: Optional[Exception] = None
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    for attempt in range(1, max_retries + 1):
         try:
             return await asyncio.wait_for(coro_factory(), timeout=GEMINI_TIMEOUT)
-        except asyncio.TimeoutError:
-            raise GeminiError(f"Gemini timeout after {GEMINI_TIMEOUT}s")
+        except asyncio.TimeoutError as exc:
+            last_exc = exc
         except Exception as exc:
             if _is_quota_exceeded(exc):
                 raise GeminiQuotaExceededError(str(exc)) from exc
-
             if not _is_unavailable(exc):
                 raise
-
             last_exc = exc
-            if attempt == MAX_RETRIES:
-                break
 
-            delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-            logger.warning(
-                "Gemini %s unavailable (attempt %d/%d), retrying in %.1fs: %s",
-                operation,
-                attempt,
-                MAX_RETRIES,
-                delay,
-                exc,
-            )
-            await asyncio.sleep(delay)
+        if attempt == max_retries:
+            break
+
+        delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+        logger.warning(
+            "Gemini %s unavailable (attempt %d/%d), retrying in %.1fs: %s",
+            operation,
+            attempt,
+            max_retries,
+            delay,
+            last_exc,
+        )
+        await asyncio.sleep(delay)
 
     logger.error(
-        "Gemini %s failed after %d attempts: %s", operation, MAX_RETRIES, last_exc
+        "Gemini %s failed after %d attempts: %s", operation, max_retries, last_exc
     )
     raise GeminiUnavailableError(
         "Gemini is temporarily unavailable due to high demand. Please try again later."
@@ -107,23 +102,30 @@ async def _with_retry(coro_factory, *, operation: str):
 
 async def _generate_with_fallback(build_coro, *, operation: str):
     """
-    Пробует MODEL (flash); если он упёрся в дневную квоту — автоматически
-    переключается на FALLBACK_MODEL (flash-lite), у которого выше бесплатный
-    RPD. build_coro(model: str) строит один и тот же запрос под любую модель.
-    Если квота исчерпана и там, и там — пробрасывает GeminiQuotaExceededError
-    дальше (её ловит api/food.py и превращает в 429 "ai_quota_exceeded").
+    MODEL (flash) → при квоте ИЛИ при устойчивой перегрузке/таймауте
+    переключается на FALLBACK_MODEL (flash-lite, отдельная квота, обычно
+    менее нагружен). Раньше fallback срабатывал только на quota — из-за
+    этого таймауты/503 сразу летели пользователю без единого шанса на
+    более лёгкую модель.
+
+    Fallback делает только одну попытку (max_retries=1) — иначе суммарное
+    время ожидания для юзера улетает за пределы разумного (2 модели по
+    несколько ретраев каждая = минуты ожидания одного запроса).
     """
     try:
         return await _with_retry(lambda: build_coro(MODEL), operation=operation)
-    except GeminiQuotaExceededError:
+    except (GeminiQuotaExceededError, GeminiUnavailableError) as exc:
         logger.warning(
-            "Gemini %s: quota exceeded on %s, falling back to %s",
+            "Gemini %s: %s on %s, falling back to %s",
             operation,
+            type(exc).__name__,
             MODEL,
             FALLBACK_MODEL,
         )
         return await _with_retry(
-            lambda: build_coro(FALLBACK_MODEL), operation=f"{operation}(fallback)"
+            lambda: build_coro(FALLBACK_MODEL),
+            operation=f"{operation}(fallback)",
+            max_retries=1,
         )
 
 
@@ -222,7 +224,7 @@ async def analyze_audio(
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=0.3,
-                max_output_tokens=MAX_OUTPUT_TOKENS_IMAGE,  # dishes[] может быть длинным, как у фото
+                max_output_tokens=MAX_OUTPUT_TOKENS_IMAGE,
                 response_mime_type="application/json",
             ),
         )

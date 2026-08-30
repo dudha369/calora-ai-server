@@ -37,7 +37,7 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 
-from .utils import get_current_user, check_rate_limit, parse_date
+from .utils import get_current_user, check_rate_limit, parse_date, release_rate_limit
 from db import (
     User,
     FoodLog,
@@ -306,15 +306,18 @@ async def analyze_photo(
             upload_food_photo(image_bytes, user.telegram_id, mime_type),
         )
     except GeminiQuotaExceededError:
+        release_rate_limit(user.telegram_id, bucket="analyze")
         logger.warning("Gemini quota exceeded for user %s", user.telegram_id)
         raise HTTPException(status_code=429, detail="ai_quota_exceeded")
     except GeminiUnavailableError as exc:
+        release_rate_limit(user.telegram_id, bucket="analyze")
         logger.warning("Gemini unavailable for user %s: %s", user.telegram_id, exc)
         raise HTTPException(
             status_code=503,
             detail="AI model is temporarily overloaded. Please try again in a moment.",
         )
     except Exception as exc:
+        release_rate_limit(user.telegram_id, bucket="analyze")
         logger.error("Food analysis failed for user %s: %s", user.telegram_id, exc)
         raise HTTPException(status_code=500, detail="Food analysis failed.")
 
@@ -345,15 +348,18 @@ async def analyze_text(body: FoodTextIn, user: User = Depends(get_current_user))
             user_id=user.telegram_id,
         )
     except GeminiQuotaExceededError:
+        release_rate_limit(user.telegram_id, bucket="analyze")
         logger.warning("Gemini quota exceeded for user %s", user.telegram_id)
         raise HTTPException(status_code=429, detail="ai_quota_exceeded")
     except GeminiUnavailableError as exc:
+        release_rate_limit(user.telegram_id, bucket="analyze")
         logger.warning("Gemini unavailable for user %s: %s", user.telegram_id, exc)
         raise HTTPException(
             status_code=503,
             detail="AI model is temporarily overloaded. Please try again in a moment.",
         )
     except Exception as exc:
+        release_rate_limit(user.telegram_id, bucket="analyze")
         logger.error("Food analysis failed for user %s: %s", user.telegram_id, exc)
         raise HTTPException(status_code=500, detail="Food analysis failed.")
 
@@ -393,15 +399,18 @@ async def transcribe_voice_endpoint(
     try:
         transcript = await transcribe_voice(audio_bytes, mime_type="audio/wav")
     except GeminiQuotaExceededError:
+        release_rate_limit(user.telegram_id, bucket="analyze")
         logger.warning("Gemini quota exceeded for user %s", user.telegram_id)
         raise HTTPException(status_code=429, detail="ai_quota_exceeded")
     except GeminiUnavailableError as exc:
+        release_rate_limit(user.telegram_id, bucket="analyze")
         logger.warning("Gemini unavailable for user %s: %s", user.telegram_id, exc)
         raise HTTPException(
             status_code=503,
             detail="AI model is temporarily overloaded. Please try again in a moment.",
         )
     except Exception as exc:
+        release_rate_limit(user.telegram_id, bucket="analyze")
         logger.error("Food analysis failed for user %s: %s", user.telegram_id, exc)
         raise HTTPException(status_code=500, detail="Food analysis failed.")
 

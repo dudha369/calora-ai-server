@@ -73,6 +73,18 @@ def check_rate_limit(
     _rate_limits[bucket][user_id].append(now)
 
 
+def release_rate_limit(user_id: int, bucket: str = "default") -> None:
+    """
+    Возвращает один слот лимита пользователю. Вызывается, когда попытка
+    не удалась по вине инфраструктуры (таймаут/перегрузка Gemini), а не
+    самого пользователя — иначе серия сбоёв на нашей стороне быстро
+    выжигает лимит и юзер упирается в 429 без единого успешного анализа.
+    """
+    timestamps = _rate_limits[bucket].get(user_id)
+    if timestamps:
+        timestamps.pop()
+
+
 # ─── Maintenance Mode Cache ───────────────────────────────────────────────────
 
 _maintenance_cache: dict[str, object] = {"value": False, "ts": 0.0}
